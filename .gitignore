@@ -1,0 +1,30 @@
+# 依赖
+node_modules/
+
+# 构建产物
+out/
+release/
+dist/
+
+# 测试产物
+screenshots/
+testdata/export/
+testdata/portable-probe/
+*.log
+
+# 本机工具配置
+.claude/
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# npm
+npm-debug.log*
+yarn-error.log*
+
+# 环境
+.env
+.env.local

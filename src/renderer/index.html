@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' model:; style-src 'self' 'unsafe-inline'; img-src 'self' data: model:; connect-src 'self' model:; script-src 'self'"
+    />
+    <title>3D模型查看器</title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="viewport"></div>
+
+      <!-- 左上角 HUD：模型统计信息 -->
+      <div id="hud" class="hud">
+        <div id="hud-file" class="hud-file">未加载模型</div>
+        <div class="hud-grid">
+          <div class="hud-item">
+            <span class="hud-label">面数</span>
+            <span id="hud-faces" class="hud-value">0</span>
+          </div>
+          <div class="hud-item">
+            <span class="hud-label">顶点数</span>
+            <span id="hud-vertices" class="hud-value">0</span>
+          </div>
+          <div class="hud-item">
+            <span class="hud-label">尺寸</span>
+            <span id="hud-size" class="hud-value">0 × 0 × 0 mm</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右上角：单位切换 + 导出 -->
+      <div id="toolbar" class="toolbar">
+        <div class="toolbar-group">
+          <label class="toolbar-label" for="unit-select">单位</label>
+          <select id="unit-select" class="toolbar-select" title="显示单位">
+            <option value="mm">mm</option>
+            <option value="cm">cm</option>
+            <option value="m">m</option>
+          </select>
+        </div>
+        <div class="toolbar-group">
+          <button id="fit-view-btn" class="toolbar-btn" title="重新适配模型到视图（F）" disabled>适配视图</button>
+        </div>
+        <div class="toolbar-group">
+          <label class="toolbar-label">导出</label>
+          <button id="export-btn" class="toolbar-btn" title="将当前模型导出为其他格式" disabled>导出…</button>
+        </div>
+      </div>
+
+      <!-- 右侧：查看模式与透明度 -->
+      <div id="view-modes" class="view-modes" title="查看模式">
+        <button class="mode-btn active" data-mode="solid" title="白模">
+          <span class="mode-icon mode-icon-solid"></span>
+          <span class="mode-label">白模</span>
+        </button>
+        <button class="mode-btn" data-mode="wire" title="在实体模型上叠加正面布线">
+          <span class="mode-icon mode-icon-wire"></span>
+          <span class="mode-label">布线</span>
+        </button>
+        <div class="opacity-control">
+          <label for="opacity-slider">透明度 <output id="opacity-value">100%</output></label>
+          <input id="opacity-slider" type="range" min="5" max="100" value="100" step="1" aria-label="模型透明度" disabled />
+        </div>
+      </div>
+
+      <div class="viewport-hint">拖拽旋转 · 滚轮缩放 · 右键平移 · 1/2 切换视图 · F 适配</div>
+
+      <!-- 拖放遮罩 -->
+      <div id="drop-overlay" class="drop-overlay">
+        <div class="drop-box">
+          <div class="drop-title">释放以打开模型</div>
+          <div class="drop-sub">支持 .fbx .stl .obj .pmx .pmd</div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

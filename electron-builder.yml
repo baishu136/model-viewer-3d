@@ -1,0 +1,35 @@
+appId: com.modelviewer3d.app
+productName: 3D模型查看器
+directories:
+  output: release
+  buildResources: resources
+files:
+  - out/**
+  - package.json
+asar: true
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+  icon: resources/icon.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 3D模型查看器
+fileAssociations:
+  - ext:
+      - fbx
+      - stl
+      - obj
+      - pmx
+      - pmd
+    name: 3D模型文件
+    description: 3D模型文件 (FBX/STL/OBJ/PMX/PMD)
+    role: Editor
