@@ -139,7 +139,7 @@ export interface LoadResult {
 }
 
 function makeMaterial(): THREE.Material {
-  return new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0.05 })
+  return new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.70, metalness: 0.08 })
 }
 
 function applyWhiteMaterial(object: THREE.Object3D): void {
@@ -186,12 +186,14 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
       const text = new TextDecoder('utf-8').decode(new Uint8Array(buffer))
       const loader = new OBJLoader(manager)
       root = loader.parse(text)
+      applyWhiteMaterial(root)
       break
     }
     case 'fbx': {
       const loader = new FBXLoader(manager)
       root = loader.parse(buffer, dir)
       animations = root.animations
+      applyWhiteMaterial(root)
       break
     }
     case 'glb':

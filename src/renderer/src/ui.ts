@@ -98,6 +98,13 @@ export class UI {
 
   updateAnimation(state: AnimationState): void {
     this.animationPanel.hidden = state.clips.length === 0
+    if (state.clips.length === 0) {
+      this.clipSelect.replaceChildren()
+      this.timeLabel.textContent = '0.00 / 0.00 秒'
+      this.timeline.value = '0'
+      this.timeline.max = '0'
+      return
+    }
     if (this.animationClips !== state.clips) {
       this.animationClips = state.clips
       this.clipSelect.replaceChildren(...state.clips.map((clip, i) => new Option(clip.name, String(i))))
