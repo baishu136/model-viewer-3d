@@ -122,7 +122,17 @@ try {
       check('FBX transform animation can be scrubbed', Math.abs(x - 1) < 0.001)
     }
   }
-  for (const name of ['triangle.ply', 'triangle-le.ply', 'triangle-be.ply', 'triangle-face-uv.ply', 'compressed.glb']) {
+  for (const name of [
+    'triangle.ply',
+    'triangle-le.ply',
+    'triangle-be.ply',
+    'triangle-face-uv.ply',
+    'compressed.glb',
+    'triangle.ma',
+    'triangle.mb',
+    'triangle.c4d',
+    'triangle.blend'
+  ]) {
     await open(name)
     data = await inspect()
     check(`${name}: one triangle loads without animation controls`, data.faces === 1 && data.state.clips.length === 0 && await win.locator('#animation-panel').isHidden())

@@ -185,5 +185,194 @@ Connections:  {
   }
   writeGlb('compressed.glb', compressedJson, compressed)
   for (const obj of [encoded, encoder, builder, mesh]) draco.destroy(obj)
+
+  // 1. Minimal Maya ASCII fixture (.ma)
+  const maContent = `//Maya ASCII 2024 scene
+//Name: triangle.ma
+currentUnit -l centimeter -a degree -t film;
+createNode transform -n "pTriangle1";
+createNode mesh -n "pTriangleShape1" -p "pTriangle1";
+\tsetAttr -k off ".v";
+\tsetAttr ".vir" yes;
+\tsetAttr ".vif" yes;
+\tsetAttr ".vt[0:2]" -type "float3" 0 0 0 10 0 0 0 10 0;
+\tsetAttr ".fc[0]" -type "polyFaces" f 3 0 1 2;
+`
+  fs.writeFileSync(path.join(dir, 'triangle.ma'), maContent)
+
+  // 2. Minimal Maya Binary fixture (.mb)
+  const mbParts = []
+  const appendIffChunk = (tag, data) => {
+    const pad = data.length % 2 !== 0 ? Buffer.alloc(1) : Buffer.alloc(0)
+    const header = Buffer.alloc(8)
+    header.write(tag, 0, 4, 'ascii')
+    header.writeUInt32BE(data.length, 4)
+    mbParts.push(header, data, pad)
+  }
+
+  // CREA chunk: node type mesh and shape name
+  appendIffChunk('CREA', Buffer.from('mesh\0pTriangleShape1\0', 'ascii'))
+
+  // ATTR chunk: .vt
+  appendIffChunk('ATTR', Buffer.from('.vt\0', 'ascii'))
+
+  // DBLK chunk: 3 vertex coordinates (9 float32s = 36 bytes)
+  const dblkData = Buffer.alloc(36)
+  const verts = [0, 0, 0, 10, 0, 0, 0, 10, 0]
+  for (let i = 0; i < 9; i++) dblkData.writeFloatBE(verts[i], i * 4)
+  appendIffChunk('DBLK', dblkData)
+
+  const mbPayload = Buffer.concat([Buffer.from('Maya', 'ascii'), ...mbParts])
+  const mbRoot = Buffer.alloc(8)
+  mbRoot.write('FOR4', 0, 4, 'ascii')
+  mbRoot.writeUInt32BE(mbPayload.length, 4)
+  fs.writeFileSync(path.join(dir, 'triangle.mb'), Buffer.concat([mbRoot, mbPayload]))
+
+  // 3. Minimal Cinema 4D fixture (.c4d)
+  const c4dBuf = Buffer.alloc(4 + 4 + 4 + 4 + 36 + 16)
+  let c4dPos = 0
+  c4dBuf.write('MC4D', c4dPos, 4, 'ascii'); c4dPos += 4
+  c4dBuf.writeUInt32BE(5100, c4dPos); c4dPos += 4 // PolygonObject ID
+  c4dBuf.writeUInt32BE(3, c4dPos); c4dPos += 4    // 3 points
+  c4dBuf.writeUInt32BE(1, c4dPos); c4dPos += 4    // 1 polygon
+  for (let i = 0; i < 9; i++) {
+    c4dBuf.writeFloatBE(verts[i], c4dPos)
+    c4dPos += 4
+  }
+  // CPolygon (a=0, b=1, c=2, d=2 for triangle)
+  c4dBuf.writeUInt32BE(0, c4dPos); c4dPos += 4
+  c4dBuf.writeUInt32BE(1, c4dPos); c4dPos += 4
+  c4dBuf.writeUInt32BE(2, c4dPos); c4dPos += 4
+  c4dBuf.writeUInt32BE(2, c4dPos); c4dPos += 4
+  fs.writeFileSync(path.join(dir, 'triangle.c4d'), c4dBuf)
+
+  // 4. Minimal Blender fixture (.blend)
+  const buildBlendFixture = () => {
+    const header = Buffer.from('BLENDER-v300', 'ascii')
+    // SDNA definition
+    const names = ['*next', '*prev', '*data', 'type', 'totvert', 'totpoly', 'totloop', '*mvert', '*mpoly', '*mloop', 'co[3]', 'loopstart', 'v', 'obmat[4][4]']
+    const types = ['char', 'short', 'int', 'float', 'MVert', 'MPoly', 'MLoop', 'Mesh', 'Object']
+    const tlens = [1, 2, 4, 4, 16, 16, 12, 64, 128]
+    const structs = [
+      // MVert (type=4, 1 field: co[3] (type=3, name=10))
+      { type: 4, fields: [[3, 10]] },
+      // MPoly (type=5, 2 fields: loopstart (type=2, name=11), totloop (type=2, name=6))
+      { type: 5, fields: [[2, 11], [2, 6]] },
+      // MLoop (type=6, 1 field: v (type=2, name=12))
+      { type: 6, fields: [[2, 12]] },
+      // Mesh (type=7, 6 fields: totvert (type=2, name=4), totpoly (type=2, name=5), totloop (type=2, name=6), *mvert (type=4, name=7), *mpoly (type=5, name=8), *mloop (type=6, name=9))
+      { type: 7, fields: [[2, 4], [2, 5], [2, 6], [4, 7], [5, 8], [6, 9]] },
+      // Object (type=8, 3 fields: type (type=1, name=3), *data (type=7, name=2), obmat[4][4] (type=3, name=13))
+      { type: 8, fields: [[1, 3], [7, 2], [3, 13]] }
+    ]
+
+    const sdnaParts = [Buffer.from('SDNANAME', 'ascii')]
+    const nameCountBuf = Buffer.alloc(4)
+    nameCountBuf.writeUInt32LE(names.length, 0)
+    sdnaParts.push(nameCountBuf)
+    for (const n of names) sdnaParts.push(Buffer.from(n + '\0', 'ascii'))
+    while (Buffer.concat(sdnaParts).length % 4 !== 0) sdnaParts.push(Buffer.from([0]))
+
+    sdnaParts.push(Buffer.from('TYPE', 'ascii'))
+    const typeCountBuf = Buffer.alloc(4)
+    typeCountBuf.writeUInt32LE(types.length, 0)
+    sdnaParts.push(typeCountBuf)
+    for (const t of types) sdnaParts.push(Buffer.from(t + '\0', 'ascii'))
+    while (Buffer.concat(sdnaParts).length % 4 !== 0) sdnaParts.push(Buffer.from([0]))
+
+    sdnaParts.push(Buffer.from('TLEN', 'ascii'))
+    const tlenBuf = Buffer.alloc(tlens.length * 2)
+    for (let i = 0; i < tlens.length; i++) tlenBuf.writeUInt16LE(tlens[i], i * 2)
+    sdnaParts.push(tlenBuf)
+    while (Buffer.concat(sdnaParts).length % 4 !== 0) sdnaParts.push(Buffer.from([0]))
+
+    sdnaParts.push(Buffer.from('STRC', 'ascii'))
+    const structCountBuf = Buffer.alloc(4)
+    structCountBuf.writeUInt32LE(structs.length, 0)
+    sdnaParts.push(structCountBuf)
+    for (const s of structs) {
+      const sHdr = Buffer.alloc(4)
+      sHdr.writeUInt16LE(s.type, 0)
+      sHdr.writeUInt16LE(s.fields.length, 2)
+      sdnaParts.push(sHdr)
+      const fBuf = Buffer.alloc(s.fields.length * 4)
+      for (let f = 0; f < s.fields.length; f++) {
+        fBuf.writeUInt16LE(s.fields[f][0], f * 4)
+        fBuf.writeUInt16LE(s.fields[f][1], f * 4 + 2)
+      }
+      sdnaParts.push(fBuf)
+    }
+
+    const dnaPayload = Buffer.concat(sdnaParts)
+
+    // Helper to format a 64-bit BHead (24 bytes)
+    const writeBHead = (code, size, oldAddr, sdnaIdx, count) => {
+      const bhead = Buffer.alloc(24)
+      bhead.write(code.padEnd(4, '\0'), 0, 4, 'ascii')
+      bhead.writeUInt32LE(size, 4)
+      bhead.writeBigUInt64LE(BigInt(oldAddr), 8)
+      bhead.writeUInt32LE(sdnaIdx, 16)
+      bhead.writeUInt32LE(count, 20)
+      return bhead
+    }
+
+    const blendBlocks = []
+
+    // 1. MVert data (3 vertices = 48 bytes)
+    const mvertData = Buffer.alloc(48)
+    for (let i = 0; i < 3; i++) {
+      mvertData.writeFloatLE(positions[i * 3], i * 16)
+      mvertData.writeFloatLE(positions[i * 3 + 1], i * 16 + 4)
+      mvertData.writeFloatLE(positions[i * 3 + 2], i * 16 + 8)
+    }
+    blendBlocks.push(writeBHead('ME', 48, 0x1000, 0, 3), mvertData)
+
+    // 2. MPoly data (1 poly = 16 bytes: loopstart=0, totloop=3)
+    const mpolyData = Buffer.alloc(16)
+    mpolyData.writeInt32LE(0, 0)
+    mpolyData.writeInt32LE(3, 4)
+    blendBlocks.push(writeBHead('ME', 16, 0x2000, 1, 1), mpolyData)
+
+    // 3. MLoop data (3 loops = 36 bytes: v=0, v=1, v=2)
+    const mloopData = Buffer.alloc(36)
+    mloopData.writeInt32LE(0, 0)
+    mloopData.writeInt32LE(1, 12)
+    mloopData.writeInt32LE(2, 24)
+    blendBlocks.push(writeBHead('ME', 36, 0x3000, 2, 3), mloopData)
+
+    // 4. Mesh data (64 bytes)
+    // Fields: totvert=3 (0), totpoly=1 (4), totloop=3 (8), *mvert=0x1000 (12), *mpoly=0x2000 (20), *mloop=0x3000 (28)
+    const meshData = Buffer.alloc(64)
+    meshData.writeInt32LE(3, 0)
+    meshData.writeInt32LE(1, 4)
+    meshData.writeInt32LE(3, 8)
+    meshData.writeBigUInt64LE(0x1000n, 12)
+    meshData.writeBigUInt64LE(0x2000n, 20)
+    meshData.writeBigUInt64LE(0x3000n, 28)
+    blendBlocks.push(writeBHead('ME', 64, 0x4000, 3, 1), meshData)
+
+    // 5. Object data (128 bytes)
+    // Fields: type=1 (0), *data=0x4000 (2), obmat (10)
+    const objData = Buffer.alloc(128)
+    objData.writeInt16LE(1, 0) // OB_MESH
+    objData.writeBigUInt64LE(0x4000n, 2)
+    // Identity matrix
+    for (let row = 0; row < 4; row++) {
+      for (let col = 0; col < 4; col++) {
+        objData.writeFloatLE(row === col ? 1.0 : 0.0, 10 + (row * 4 + col) * 4)
+      }
+    }
+    blendBlocks.push(writeBHead('OB', 128, 0x5000, 4, 1), objData)
+
+    // 6. DNA1 block
+    blendBlocks.push(writeBHead('DNA1', dnaPayload.length, 0x9000, 0, 1), dnaPayload)
+
+    // 7. ENDB block
+    blendBlocks.push(writeBHead('ENDB', 0, 0, 0, 0))
+
+    return Buffer.concat([header, ...blendBlocks])
+  }
+  fs.writeFileSync(path.join(dir, 'triangle.blend'), buildBlendFixture())
+
   return dir
 }

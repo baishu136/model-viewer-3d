@@ -11,6 +11,10 @@ import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js'
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js'
 import { FBXExporter } from '@comfyorg/fbx-exporter-three'
 import { MODEL_EXTENSIONS } from '../../shared/model-formats'
+import { BlendLoader } from './loaders/BlendLoader'
+import { MayaAsciiLoader } from './loaders/MayaAsciiLoader'
+import { MayaBinaryLoader } from './loaders/MayaBinaryLoader'
+import { C4DLoader } from './loaders/C4DLoader'
 
 export const SUPPORTED_EXTENSIONS = MODEL_EXTENSIONS
 export const EXPORT_FORMATS = ['obj', 'stl', 'fbx']
@@ -115,6 +119,8 @@ export async function detectUnit(filePath: string, buffer: ArrayBuffer): Promise
     const u = detectFbxUnit(buffer)
     if (u) return u
   }
+  if (ext === 'blend') return 'm'
+  if (ext === 'ma' || ext === 'mb' || ext === 'c4d') return 'cm'
   return 'mm'
 }
 
@@ -130,6 +136,19 @@ export interface LoadResult {
 
 function makeMaterial(): THREE.Material {
   return new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0.05 })
+}
+
+function applyWhiteMaterial(object: THREE.Object3D): void {
+  object.traverse((child) => {
+    if ((child as THREE.Mesh).isMesh) {
+      const mesh = child as THREE.Mesh
+      if (mesh.name === 'C4DPreviewBoard') return
+      mesh.material = makeMaterial()
+      if (!mesh.geometry.getAttribute('normal')) {
+        mesh.geometry.computeVertexNormals()
+      }
+    }
+  })
 }
 
 async function readBuffer(filePath: string): Promise<ArrayBuffer> {
@@ -224,6 +243,35 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
         loader.load(url, (m) => resolve(m), undefined, (err) => reject(err))
       })
       root = mesh
+      break
+    }
+    case 'blend': {
+      const loader = new BlendLoader(manager)
+      root = loader.parse(buffer)
+      applyWhiteMaterial(root)
+      unit = 'm'
+      break
+    }
+    case 'ma': {
+      const text = new TextDecoder('utf-8').decode(new Uint8Array(buffer))
+      const loader = new MayaAsciiLoader(manager)
+      root = loader.parse(text)
+      applyWhiteMaterial(root)
+      unit = 'cm'
+      break
+    }
+    case 'mb': {
+      const loader = new MayaBinaryLoader(manager)
+      root = loader.parse(buffer)
+      applyWhiteMaterial(root)
+      unit = 'cm'
+      break
+    }
+    case 'c4d': {
+      const loader = new C4DLoader(manager)
+      root = loader.parse(buffer)
+      applyWhiteMaterial(root)
+      unit = 'cm'
       break
     }
     default:
