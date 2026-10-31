@@ -81,13 +81,30 @@ function isModelFile(p: string): boolean {
   return SUPPORTED_EXT.has(path.extname(p).toLowerCase())
 }
 
+/** 智能解析实际模型文件（若用户点击了 macOS 解压残留的 ._* 或 __MACOSX 影子文件，自动重定向至真实模型） */
+function resolveActualModelPath(filePath: string): string {
+  const fileName = path.basename(filePath)
+  if (fileName.startsWith('._') || filePath.includes('__MACOSX')) {
+    const cleanFileName = fileName.replace(/^\._/, '')
+    const dir = path.dirname(filePath)
+    const sameDirCandidate = path.join(dir, cleanFileName)
+    if (fs.existsSync(sameDirCandidate)) return sameDirCandidate
+
+    const cleanPath = filePath
+      .replace(/[\\/]__MACOSX(?=[\\/]|$)/gi, '')
+      .replace(new RegExp(`[\\\\/]\\._${cleanFileName.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}$`, 'i'), `\\${cleanFileName}`)
+    if (fs.existsSync(cleanPath)) return cleanPath
+  }
+  return filePath
+}
+
 /** 从 argv 中提取第一个 3D 模型文件路径（跳过可执行路径与各种标志） */
 function extractModelPath(argv: string[]): string | null {
   for (const arg of argv) {
     if (arg.startsWith('-') || arg.startsWith('--')) continue
     if (isModelFile(arg)) {
       try {
-        if (fs.existsSync(arg)) return arg
+        if (fs.existsSync(arg)) return resolveActualModelPath(arg)
       } catch {
         /* 非法路径忽略 */
       }
@@ -97,10 +114,11 @@ function extractModelPath(argv: string[]): string | null {
 }
 
 function sendOpenFile(file: string): void {
+  const actualFile = resolveActualModelPath(file)
   if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.focus()
-    mainWindow.webContents.send('open-file', file)
+    mainWindow.webContents.send('open-file', actualFile)
   }
 }
 

@@ -222,19 +222,38 @@ export class Viewer {
     this.modelContainer = new THREE.Group()
     this.modelContainer.scale.setScalar(scaleToMm)
     this.modelContainer.add(root)
+    this.clips = clips.filter((clip) => clip.duration > 0 && clip.tracks.length > 0)
+    this.clipInfo = this.clips.map((clip, i) => ({ name: clip.name || `动画 ${i + 1}`, duration: clip.duration }))
+
     root.traverse((obj) => {
       obj.castShadow = false
       obj.receiveShadow = false
       const mesh = obj as THREE.Mesh
       if (!mesh.isMesh && !(obj as THREE.Points).isPoints && !(obj as THREE.Line).isLine) return
+
+      // Fix: If mesh has morphAttributes but no active morph tracks in clips,
+      // clear morphAttributes to avoid Three.js shader crash ('MORPHTARGETS_COUNT' undeclared)
+      if (mesh.geometry?.morphAttributes && (!this.clips.length || !mesh.morphTargetInfluences?.length)) {
+        mesh.geometry.morphAttributes = {}
+        mesh.morphTargetInfluences = undefined
+        mesh.morphTargetDictionary = undefined
+      }
+
+      // Fix: Ensure SkinnedMesh skeleton is cleanly posed and updated
+      if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
+        const skinned = mesh as THREE.SkinnedMesh
+        if (skinned.skeleton) {
+          skinned.skeleton.pose()
+          skinned.skeleton.update()
+        }
+      }
+
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
       materials.filter((material): material is THREE.Material => Boolean(material)).forEach((material) => {
         this.sourceMaterials.add(material)
       })
     })
     this.scene.add(this.modelContainer)
-    this.clips = clips.filter((clip) => clip.duration > 0 && clip.tracks.length > 0)
-    this.clipInfo = this.clips.map((clip, i) => ({ name: clip.name || `动画 ${i + 1}`, duration: clip.duration }))
     if (this.clips.length) {
       this.mixer = new THREE.AnimationMixer(root)
       this.mixer.addEventListener('finished', () => {
