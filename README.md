@@ -103,3 +103,12 @@ release/                 # 本地打包产物（不提交到 Git）
 - **DCC 软件格式原生兼容**：内置轻量原生几何体解析器，直接解析 `.blend` (SDNA)、`.ma` (MEL 语句)、`.mb` (IFF 数据块) 以及 `.c4d` (PolygonObject 烘焙缓存)，无需安装任何外部软件，毫秒级快速提取多边形网格渲染。因面数过高或闭源限制，暂不支持 3ds Max (.max) 与 ZBrush (.ztl/.zpr)。
 - **动画范围**：播放文件内已有的关键帧、骨骼蒙皮和形态动画；原软件的 IK、约束、修改器或物理模拟需要先烘焙。OBJ/STL/PLY/BLEND/C4D/MA/MB 为静态网格输入。
 - **glTF 附属文件**：`.gltf` 引用的 `.bin` 几何/动画数据必须保留相对目录；材质和贴图不需要。GLB 通常将数据打包在单个文件内。
+
+## 赞助与支持
+
+如果您觉得这个项目对您有所帮助，欢迎赞助支持作者！您的支持是项目持续维护与带来更多新特性的最大动力。
+
+| 微信支付 (WeChat Pay) | 支付宝 (Alipay) |
+| :---: | :---: |
+| <img src="resources/sponsor_wechat.jpg" width="260" alt="微信支付" /> | <img src="resources/sponsor_alipay.jpg" width="260" alt="支付宝" /> |
+
