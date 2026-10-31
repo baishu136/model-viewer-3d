@@ -23,6 +23,12 @@ export interface AnimationState {
   loop: boolean
 }
 
+interface NodeRestPose {
+  position: THREE.Vector3
+  quaternion: THREE.Quaternion
+  scale: THREE.Vector3
+}
+
 /**
  * 3D 查看器核心：管理场景、相机、网格/坐标轴、模型加载、自适应取景、
  * 单模型释放与查看模式切换。
@@ -34,8 +40,9 @@ export class Viewer {
   private controls: OrbitControls
   private grid: THREE.GridHelper
   private axes: THREE.AxesHelper
-  private light: THREE.DirectionalLight
-  private ambient: THREE.AmbientLight
+  private hemiLight: THREE.HemisphereLight
+  private keyLight: THREE.DirectionalLight
+  private fillLight: THREE.DirectionalLight
 
   /** 当前场景中唯一的模型根节点 */
   private modelRoot: THREE.Object3D | null = null
@@ -51,6 +58,10 @@ export class Viewer {
   private action: THREE.AnimationAction | null = null
   private selectedClip = -1
   private playing = false
+  private isAnimated = false
+  private wireNeedsSync = false
+  private restPoses = new Map<THREE.Object3D, NodeRestPose>()
+  private restMorphInfluences = new Map<THREE.Mesh, number[]>()
   private speed = 1
   private loop = true
   private clock = new THREE.Clock()
@@ -88,11 +99,13 @@ export class Viewer {
     this.controls.dampingFactor = 0.08
     this.controls.target.set(0, 0, 0)
 
-    // 光照：柔和白光，避免默认阴影
-    this.ambient = new THREE.AmbientLight(0xffffff, 0.5)
-    this.light = new THREE.DirectionalLight(0xffffff, 1.0)
-    this.light.position.set(1, 1.5, 1)
-    this.scene.add(this.ambient, this.light)
+    // 演播室级 3 点光照系统：塑造自然明暗转折与微高光，彻底解决白模发白与死黑问题
+    this.hemiLight = new THREE.HemisphereLight(0xffffff, 0xd4d8e0, 0.65)
+    this.keyLight = new THREE.DirectionalLight(0xffffff, 0.85)
+    this.keyLight.position.set(1.5, 2.2, 1.8)
+    this.fillLight = new THREE.DirectionalLight(0xedf2f7, 0.40)
+    this.fillLight.position.set(-1.8, 0.8, -1.2)
+    this.scene.add(this.hemiLight, this.keyLight, this.fillLight)
 
     // 网格与坐标轴
     this.grid = new THREE.GridHelper(1000, 10, 0xd1d5db, 0xe5e7eb)
@@ -128,9 +141,34 @@ export class Viewer {
     this.onAnimation?.(this.getAnimationState())
   }
 
+  private resetToRestPose(): void {
+    if (!this.modelRoot) return
+    for (const [node, rest] of this.restPoses) {
+      node.position.copy(rest.position)
+      node.quaternion.copy(rest.quaternion)
+      node.scale.copy(rest.scale)
+    }
+    this.modelRoot.traverse((obj) => {
+      if ((obj as THREE.SkinnedMesh).isSkinnedMesh) {
+        const skinned = obj as THREE.SkinnedMesh
+        skinned.skeleton?.pose()
+        skinned.skeleton?.update()
+      }
+    })
+    for (const [mesh, morphs] of this.restMorphInfluences) {
+      if (mesh.morphTargetInfluences) {
+        for (let i = 0; i < mesh.morphTargetInfluences.length; i++) {
+          mesh.morphTargetInfluences[i] = morphs[i] ?? 0
+        }
+      }
+    }
+    this.modelRoot.updateMatrixWorld(true)
+  }
+
   selectAnimation(index: number): void {
     if (!this.mixer || !this.clips[index]) return
     this.mixer.stopAllAction()
+    this.resetToRestPose()
     this.selectedClip = index
     this.action = this.mixer.clipAction(this.clips[index]).reset()
     this.action.setLoop(this.loop ? THREE.LoopRepeat : THREE.LoopOnce, this.loop ? Infinity : 1)
@@ -139,7 +177,7 @@ export class Viewer {
     this.action.paused = true
     this.playing = false
     this.mixer.update(0)
-    this.syncWireMeshes()
+    this.wireNeedsSync = true
     this.emitAnimationState()
   }
 
@@ -148,6 +186,7 @@ export class Viewer {
     if (!this.playing && this.action.time >= this.action.getClip().duration) this.action.reset().play()
     this.playing = !this.playing
     this.action.paused = !this.playing
+    this.wireNeedsSync = true
     this.emitAnimationState()
   }
 
@@ -158,7 +197,7 @@ export class Viewer {
     this.action.paused = true
     this.action.time = THREE.MathUtils.clamp(time, 0, this.action.getClip().duration)
     this.mixer.update(0)
-    this.syncWireMeshes()
+    this.wireNeedsSync = true
     this.emitAnimationState()
   }
 
@@ -198,15 +237,20 @@ export class Viewer {
 
   private animate(): void {
     this.animationId = requestAnimationFrame(() => this.animate())
-    const delta = Math.min(this.clock.getDelta(), 0.1)
-    if (this.mixer && this.playing) {
+    const delta = Math.min(this.clock.getDelta(), 0.05)
+    if (this.isAnimated && this.mixer && this.playing) {
       this.mixer.update(delta * this.speed)
+      this.wireNeedsSync = true
       if (performance.now() - this.lastAnimationUpdate > 100) {
         this.lastAnimationUpdate = performance.now()
         this.emitAnimationState()
       }
     }
-    this.syncWireMeshes()
+    // 动静分治：仅在动画播放或视角/形态发生变化时同步线框，静态模型每帧 0 矩阵运算开销
+    if (this.wireNeedsSync) {
+      this.syncWireMeshes()
+      this.wireNeedsSync = false
+    }
     this.controls.update()
     this.renderer.render(this.scene, this.camera)
   }
@@ -224,8 +268,25 @@ export class Viewer {
     this.modelContainer.add(root)
     this.clips = clips.filter((clip) => clip.duration > 0 && clip.tracks.length > 0)
     this.clipInfo = this.clips.map((clip, i) => ({ name: clip.name || `动画 ${i + 1}`, duration: clip.duration }))
+    this.isAnimated = this.clips.length > 0
+
+    // 缓存初始 Rest Pose
+    this.restPoses.clear()
+    this.restMorphInfluences.clear()
 
     root.traverse((obj) => {
+      this.restPoses.set(obj, {
+        position: obj.position.clone(),
+        quaternion: obj.quaternion.clone(),
+        scale: obj.scale.clone()
+      })
+      if ((obj as THREE.Mesh).isMesh) {
+        const m = obj as THREE.Mesh
+        if (m.morphTargetInfluences) {
+          this.restMorphInfluences.set(m, [...m.morphTargetInfluences])
+        }
+      }
+
       obj.castShadow = false
       obj.receiveShadow = false
       const mesh = obj as THREE.Mesh
@@ -267,6 +328,7 @@ export class Viewer {
     this.fitCameraToModel()
     this.applyViewMode()
     this.updateStats(fileName)
+    this.wireNeedsSync = true
   }
 
   /** 移除模型并释放 GPU/内存资源 */
@@ -280,6 +342,10 @@ export class Viewer {
     this.clipInfo = []
     this.selectedClip = -1
     this.playing = false
+    this.isAnimated = false
+    this.wireNeedsSync = false
+    this.restPoses.clear()
+    this.restMorphInfluences.clear()
     if (this.modelRoot) {
       this.disposeObject(this.modelRoot)
       this.sourceMaterials.forEach((material) => this.disposeMaterial(material))
@@ -328,8 +394,6 @@ export class Viewer {
   /** 相机自动适配模型包围盒，模型居中到原点 */
   private fitCameraToModel(): void {
     if (!this.modelRoot) return
-    // SkinnedMesh's inverse bind matrix must reflect the millimetre wrapper
-    // before computing deformed vertex bounds (updateWorldMatrix alone skips it).
     this.modelContainer.updateMatrixWorld(true)
     const box = new THREE.Box3().setFromObject(this.modelContainer, true)
     if (box.isEmpty()) return
@@ -343,31 +407,64 @@ export class Viewer {
     this.modelContainer.position.sub(offset)
     this.modelContainer.updateMatrixWorld(true)
 
-    // 根据包围球直径确定相机距离
-    const radius = Math.max(size.length() / 2, 1)
-    const fov = (this.camera.fov * Math.PI) / 180
-    const distance = (radius / Math.tan(fov / 2)) * 1.15
-    this.camera.position.set(distance * 0.7, distance * 0.55, distance)
-    this.camera.near = Math.max(distance / 1000, 0.01)
-    this.camera.far = Math.max(distance * 100, 100000)
+    // 智能视口与展板自适应
+    const isStandee =
+      !!this.modelRoot.getObjectByName('C4DPreviewBoard') ||
+      !!this.modelRoot.getObjectByName('MaxPreviewBoard') ||
+      size.z <= 0.005 * Math.max(size.x, size.y)
+
+    const fovV = (this.camera.fov * Math.PI) / 180
+    const fovH = 2 * Math.atan(Math.tan(fovV / 2) * this.camera.aspect)
+
+    let distance: number
+    if (isStandee) {
+      // 2D 展板：正对摄像机无畸变平铺居中
+      const distV = (size.y / 2) / Math.tan(fovV / 2)
+      const distH = (size.x / 2) / Math.tan(fovH / 2)
+      distance = Math.max(distV, distH, 1) * 1.15
+      this.camera.position.set(0, 0, distance)
+    } else {
+      // 3D 立体模型：黄金等轴测斜视角
+      const radius = Math.max(size.length() / 2, 0.01)
+      const distV = radius / Math.tan(fovV / 2)
+      const distH = radius / Math.tan(fovH / 2)
+      distance = Math.max(distV, distH, 1) * 1.18
+      const dir = new THREE.Vector3(0.7, 0.55, 1.0).normalize()
+      this.camera.position.copy(dir.multiplyScalar(distance))
+    }
+
+    // 全动态近远裁剪面保护：维持最佳 1:5000 深度缓冲精度，杜绝微小模型 Z-fighting 与大建筑近切穿模
+    this.camera.near = Math.max(distance * 0.005, 0.005)
+    this.camera.far = Math.max(distance * 50, 200)
     this.camera.updateProjectionMatrix()
+
     this.controls.target.set(0, 0, 0)
+    this.controls.minDistance = Math.max(distance * 0.02, 0.01)
+    this.controls.maxDistance = distance * 10
     this.controls.update()
 
-    this.updateGrid(maxDim)
+    this.updateGrid(maxDim, size.y)
   }
 
   /** 网格与坐标轴随模型尺寸自适应 */
-  private updateGrid(maxDim: number): void {
+  private updateGrid(maxDim: number, modelHeight = 0): void {
     this.scene.remove(this.grid)
     this.grid.geometry.dispose()
     const materials = Array.isArray(this.grid.material) ? this.grid.material : [this.grid.material]
     materials.forEach((material) => material.dispose())
-    const gridSize = Math.max(100, Math.pow(10, Math.ceil(Math.log10(maxDim)))) * 1.5
+    const safeDim = Math.max(maxDim, 0.01)
+    const exponent = Math.ceil(Math.log10(safeDim))
+    const gridStep = Math.pow(10, exponent)
+    const gridSize = gridStep * 1.5
     const divisions = 10
-    this.grid = new THREE.GridHelper(gridSize, divisions, 0x9ca3af, 0xd1d5db)
-    this.grid.position.y = 0
+    this.grid = new THREE.GridHelper(gridSize, divisions, 0xd1d5db, 0xe5e7eb)
+    if (modelHeight > 0) {
+      this.grid.position.y = -modelHeight / 2 // 网格贴合模型底部接触面，产生真实着地感
+    } else {
+      this.grid.position.y = 0
+    }
     this.scene.add(this.grid)
+    this.axes.scale.setScalar(Math.max(safeDim * 0.35, 1))
   }
 
   /** 查看模式专用材质缓存，切换模式时复用，避免反复分配 */
@@ -383,8 +480,8 @@ export class Viewer {
     if (!this.solidMaterial) {
       this.solidMaterial = new THREE.MeshStandardMaterial({
         color: 0xffffff,
-        roughness: 0.85,
-        metalness: 0.05
+        roughness: 0.70,
+        metalness: 0.08
       })
     }
     const isWireMode = this.mode === 'wire'
@@ -459,7 +556,7 @@ export class Viewer {
   /** Wire overlays share the current skeleton/morph pose and follow animated object transforms. */
   private syncWireMeshes(): void {
     if (!this.wireLayer || !this.modelRoot) return
-    this.modelRoot.updateWorldMatrix(true, true)
+    this.modelRoot.updateWorldMatrix(false, true)
     for (const { source, wire } of this.wireMeshes) {
       wire.matrix.copy(source.matrixWorld)
       wire.matrixWorldNeedsUpdate = true
@@ -512,6 +609,9 @@ export class Viewer {
     this.solidMaterial?.dispose()
     this.frontWireMaterial?.dispose()
     this.pointMaterial.dispose()
+    this.keyLight.dispose()
+    this.fillLight.dispose()
+    this.hemiLight.dispose()
     this.renderer.dispose()
   }
 
