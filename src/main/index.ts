@@ -24,7 +24,7 @@ function registerFileAssociations(): void {
       `HKCU\\Software\\Classes\\${FILE_ASSOC_CLASS}`,
       '/ve',
       '/d',
-      '3D模型文件 (FBX/GLB/glTF/OBJ/STL/PLY/PMX/PMD/BLEND/C4D/MA/MB)',
+      '3D模型文件 (FBX/GLB/glTF/OBJ/STL/PLY/PMX/PMD/BLEND/C4D/MA/MB/MAX)',
       '/f'
     ]
     const iconArgs = [

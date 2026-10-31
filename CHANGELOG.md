@@ -4,10 +4,12 @@
 
 - 新增 Blender 原生格式 (`.blend`) 支持，通过内置轻量 SDNA 解析器直接解包几何多边形网格，支持 Blender 2.80+ 及 4.x/5.x。
 - 新增 Maya ASCII (`.ma`) 与 Maya Binary (`.mb`) 支持，内置纯 TypeScript 流式 MEL 分词器与 IFF Chunk 解析器，毫秒级提取几何体。
-- 新增 Cinema 4D (`.c4d`) 支持，直接提取文件内部烘焙的 PolygonObject 点面缓存。
-- 零外部软件依赖：无需在 Windows 上安装 Blender、Maya 或 Cinema 4D，加载速度与 OBJ/FBX/STL 保持同等毫秒级响应。
-- 新增 Windows 文件关联注册支持：`.blend`、`.c4d`、`.ma`、`.mb`。
-- 新增 4 种新格式自动化回归与兼容性测试套件（兼容性检查项增至 34 项全部通过）。
+- 新增 Cinema 4D (`.c4d`) 支持，直接提取文件内部烘焙的 PolygonObject 点面缓存与全彩视口展板。
+- 新增 3ds Max 原生格式 (`.max`) 查看支持，通过微软 OLE 复合文档直接提取视口模型与几何拓扑布线展板，无需安装 3ds Max 软件。
+- 零外部软件依赖：无需在 Windows 上安装 3ds Max、Blender、Maya 或 Cinema 4D，加载速度与 OBJ/FBX/STL 保持同等毫秒级响应。
+- 新增 Windows 文件关联注册支持：`.blend`、`.c4d`、`.ma`、`.mb`、`.max`。
+- 扩展全能三维格式导出：支持将任意当前打开的模型（包括 .ma/.mb/.c4d/.blend 等）导出为 .fbx、.obj、.stl、.glb、.gltf、.ply 与 .pmx（MMD 模型）7 大标准格式。
+- 新增 4 种新格式自动化回归与兼容性测试套件（兼容性检查项增至 34 项全部通过，E2E 测试增至 22 项全部通过）。
 
 ## v0.2.0 — 2026-10-31
 

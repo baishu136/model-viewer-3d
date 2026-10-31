@@ -37,6 +37,7 @@ fileAssociations:
       - c4d
       - ma
       - mb
+      - max
     name: 3D模型文件
-    description: 3D模型文件 (FBX/GLB/glTF/OBJ/STL/PLY/PMX/PMD/BLEND/C4D/MA/MB)
+    description: 3D模型文件 (FBX/GLB/glTF/OBJ/STL/PLY/PMX/PMD/BLEND/C4D/MA/MB/MAX)
     role: Editor

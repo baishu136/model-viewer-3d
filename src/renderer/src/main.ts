@@ -64,8 +64,12 @@ function promptExportFormat(): Promise<string | null> {
 
     const items = [
       { label: 'Wavefront OBJ (.obj)', value: 'obj' },
+      { label: 'glTF 2.0 二进制 (.glb)', value: 'glb' },
+      { label: 'glTF 2.0 文本 (.gltf)', value: 'gltf' },
+      { label: 'Autodesk FBX (.fbx)', value: 'fbx' },
       { label: 'STL 二进制 (.stl)', value: 'stl' },
-      { label: 'Autodesk FBX (.fbx)', value: 'fbx' }
+      { label: 'PLY 几何网格 (.ply)', value: 'ply' },
+      { label: 'MMD 模型文件 (.pmx)', value: 'pmx' }
     ]
     items.forEach((item) => {
       const btn = document.createElement('button')
