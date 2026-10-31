@@ -124,7 +124,7 @@ export async function detectUnit(filePath: string, buffer: ArrayBuffer): Promise
     if (u) return u
   }
   if (ext === 'blend') return 'm'
-  if (ext === 'ma' || ext === 'mb' || ext === 'c4d' || ext === 'max') return 'cm'
+  if (ext === 'ma' || ext === 'mb' || ext === 'c4d' || ext === 'max' || ext === 'pmx' || ext === 'pmd') return 'cm'
   return 'mm'
 }
 

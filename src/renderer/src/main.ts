@@ -119,9 +119,25 @@ function promptExportFormat(): Promise<string | null> {
 /** 加载模型文件（自动替换场景中已有模型） */
 let openRequest = 0
 async function openModel(filePath: string): Promise<void> {
+  let targetPath = filePath
+  const baseName = targetPath.split(/[\\/]/).pop() || ''
+  if (baseName.startsWith('._') || targetPath.includes('__MACOSX')) {
+    const cleanFileName = baseName.replace(/^\._/, '')
+    const cleanPath = targetPath
+      .replace(/[\\/]__MACOSX(?=[\\/]|$)/gi, '')
+      .replace(new RegExp(`[\\\\/]\\._${cleanFileName.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}$`, 'i'), `\\${cleanFileName}`)
+    try {
+      await window.api.readFile(cleanPath)
+      targetPath = cleanPath
+    } catch {
+      alert(`无法加载模型: ${filePath}\n此文件为 macOS 压缩包生成的元数据影子文件（._ 开头，非真实 3D 模型），请打开同名的正常模型文件。`)
+      return
+    }
+  }
+
   const request = ++openRequest
   try {
-    const { root, unit, animations } = await loadModelFile(filePath)
+    const { root, unit, animations } = await loadModelFile(targetPath)
     if (request !== openRequest) {
       // A slower previous request must not replace the latest model or leak its resources.
       const materials = new Set<import('three').Material>()
@@ -135,14 +151,14 @@ async function openModel(filePath: string): Promise<void> {
       materials.forEach((material) => material.dispose())
       return
     }
-    currentFileName = filePath.split(/[\\/]/).pop() || filePath
+    currentFileName = targetPath.split(/[\\/]/).pop() || targetPath
     viewer.setModel(root, currentFileName, animations, UNIT_TO_MM[unit])
     ui.setUnit(unit)
   } catch (err) {
     if (request !== openRequest) return
     console.error('加载模型失败:', err)
     // 简单提示
-    alert(`无法加载模型: ${filePath}\n${err instanceof Error ? err.message : String(err)}`)
+    alert(`无法加载模型: ${targetPath}\n${err instanceof Error ? err.message : String(err)}`)
   }
 }
 
