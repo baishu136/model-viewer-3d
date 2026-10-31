@@ -9,9 +9,11 @@ export const MODEL_EXTENSIONS = [
   'pmx',
   'pmd',
   'blend',
+  'blender',
   'c4d',
   'ma',
   'mb',
-  'max'
+  'max',
+  'md'
 ]
 

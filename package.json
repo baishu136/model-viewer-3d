@@ -1,7 +1,7 @@
 {
   "name": "model-viewer-3d",
   "version": "0.3.0",
-  "description": "独立运行的 3D 模型与动画查看器，支持 FBX、GLB/glTF、OBJ、STL、PLY、BLEND、C4D、MA、MB、MAX，以及 OBJ/STL/FBX/GLB/glTF/PLY/PMX 导出",
+  "description": "独立运行的 3D 模型与动画查看器，支持 FBX、GLB/glTF、OBJ、STL、PLY、BLEND、BLENDER、C4D、MA、MB、MAX、MD，以及 OBJ/STL/FBX/GLB/glTF/PLY/PMX 导出",
   "main": "./out/main/index.js",
   "type": "module",
   "author": "",
