@@ -34,10 +34,12 @@ fileAssociations:
       - pmx
       - pmd
       - blend
+      - blender
       - c4d
       - ma
       - mb
       - max
+      - md
     name: 3D模型文件
-    description: 3D模型文件 (FBX/GLB/glTF/OBJ/STL/PLY/PMX/PMD/BLEND/C4D/MA/MB/MAX)
+    description: 3D模型文件 (FBX/GLB/glTF/OBJ/STL/PLY/PMX/PMD/BLEND/C4D/MA/MB/MAX/MD)
     role: Editor

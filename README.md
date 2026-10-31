@@ -16,7 +16,7 @@
 - **单位切换**：mm / cm / m 下拉切换，尺寸显示与网格自适应联动
 
 ### 便捷的操作方式
-- **直接打开 3D 文件**：安装后双击 `.fbx / .glb / .gltf / .obj / .stl / .ply / .pmx / .pmd / .blend / .c4d / .ma / .mb / .max` 文件即可用本软件打开
+- **直接打开 3D 文件**：安装后双击 `.fbx / .glb / .gltf / .obj / .stl / .ply / .pmx / .pmd / .blend / .blender / .c4d / .ma / .mb / .max / .md` 文件即可用本软件打开
 - **拖放加载**：将模型文件拖入窗口即可查看
 - **单模型场景**：加载第二个文件时**立即卸载第一个**，场景永远只有一个模型，内存不泄漏
 - **单实例聚焦**：软件已运行时再次双击文件 → 聚焦现有窗口并切换为新模型
@@ -24,7 +24,7 @@
 - **快捷键**：`1` 白模、`2` 布线、`F` 适配视图、`空格` 播放/暂停（焦点位于查看区域时）
 
 ### 格式转换
-- **输入**：FBX / GLB / glTF / OBJ / STL（二进制与 ASCII）/ PLY / PMX / PMD / BLEND / C4D / MA / MB / MAX
+- **输入**：FBX / GLB / glTF / OBJ / STL（二进制与 ASCII）/ PLY / PMX / PMD / BLEND / BLENDER / C4D / MA / MB / MAX / MD
 - **输出**：OBJ / STL（二进制）/ FBX（二进制，兼容 Unity/Unreal/Blender/Maya）/ GLB / glTF / PLY / PMX（MMD）
 - 转换通过界面"导出…"入口完成，支持将当前加载的模型（包括 Blender、Maya、Cinema 4D 等原生工程）烘焙为任意上述标准三维格式；骨骼及形态动画按当前显示姿态烘焙为静态网格。仅含点或线的模型不能导出为三角网格。
 

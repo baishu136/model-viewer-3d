@@ -52,29 +52,52 @@ export class MaxLoader {
       }
     }
 
-    if (dibOffset === -1) {
-      throw new Error('未能在 .max 文件中检索到有效视口图像流。')
+    let dataUri = ''
+
+    if (dibOffset !== -1) {
+      // 3. Assemble standard Windows BMP binary stream
+      const dibBytes = sBuf.subarray(dibOffset)
+      const bmfHeader = new Uint8Array(14)
+      bmfHeader[0] = 0x42 // 'B'
+      bmfHeader[1] = 0x4d // 'M'
+      const totalSize = 14 + dibBytes.length
+      new DataView(bmfHeader.buffer).setUint32(2, totalSize, true)
+      new DataView(bmfHeader.buffer).setUint32(10, 54, true) // Offset to pixel data
+
+      const bmpBytes = new Uint8Array(14 + dibBytes.length)
+      bmpBytes.set(bmfHeader, 0)
+      bmpBytes.set(dibBytes, 14)
+
+      let binary = ''
+      for (let i = 0; i < bmpBytes.length; i++) {
+        binary += String.fromCharCode(bmpBytes[i])
+      }
+      dataUri = 'data:image/bmp;base64,' + btoa(binary)
+    } else {
+      // Fallback: Generate an informative high-res canvas board if thumbnail wasn't saved in Max
+      const canvas = document.createElement('canvas')
+      canvas.width = 512
+      canvas.height = 320
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.fillStyle = '#1e293b'
+        ctx.fillRect(0, 0, 512, 320)
+        ctx.fillStyle = '#38bdf8'
+        ctx.font = 'bold 24px sans-serif'
+        ctx.fillText('3ds Max 场景工程文件 (.max)', 36, 70)
+        ctx.fillStyle = '#cbd5e1'
+        ctx.font = '16px sans-serif'
+        ctx.fillText('该文件由 3ds Max 保存，但未勾选“保存缩略图”。', 36, 130)
+        ctx.fillText('建议在 3ds Max 中开启视口预览，或导出为', 36, 170)
+        ctx.fillText('FBX / glTF / OBJ 标准格式以获得完整网格与材质。', 36, 205)
+        ctx.fillStyle = '#94a3b8'
+        ctx.font = '14px monospace'
+        ctx.fillText(`场景流大小: ${(buffer.byteLength / 1024 / 1024).toFixed(2)} MB`, 36, 265)
+      }
+      dataUri = canvas.toDataURL('image/png')
+      width = 512
+      height = 320
     }
-
-    // 3. Assemble standard Windows BMP binary stream
-    const dibBytes = sBuf.subarray(dibOffset)
-    const bmfHeader = new Uint8Array(14)
-    bmfHeader[0] = 0x42 // 'B'
-    bmfHeader[1] = 0x4d // 'M'
-    const totalSize = 14 + dibBytes.length
-    new DataView(bmfHeader.buffer).setUint32(2, totalSize, true)
-    new DataView(bmfHeader.buffer).setUint32(10, 54, true) // Offset to pixel data
-
-    const bmpBytes = new Uint8Array(14 + dibBytes.length)
-    bmpBytes.set(bmfHeader, 0)
-    bmpBytes.set(dibBytes, 14)
-
-    // Convert to DataURI
-    let binary = ''
-    for (let i = 0; i < bmpBytes.length; i++) {
-      binary += String.fromCharCode(bmpBytes[i])
-    }
-    const dataUri = 'data:image/bmp;base64,' + btoa(binary)
 
     // 4. Create 3D interactive viewport standee
     const material = new THREE.MeshBasicMaterial({

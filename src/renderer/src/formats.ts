@@ -123,8 +123,8 @@ export async function detectUnit(filePath: string, buffer: ArrayBuffer): Promise
     const u = detectFbxUnit(buffer)
     if (u) return u
   }
-  if (ext === 'blend') return 'm'
-  if (ext === 'ma' || ext === 'mb' || ext === 'c4d' || ext === 'max' || ext === 'pmx' || ext === 'pmd') return 'cm'
+  if (ext === 'blend' || ext === 'blender') return 'm'
+  if (ext === 'ma' || ext === 'mb' || ext === 'c4d' || ext === 'max' || ext === 'pmx' || ext === 'pmd' || ext === 'md') return 'cm'
   return 'mm'
 }
 
@@ -251,7 +251,8 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
       root = mesh
       break
     }
-    case 'blend': {
+    case 'blend':
+    case 'blender': {
       const loader = new BlendLoader(manager)
       root = loader.parse(buffer)
       applyWhiteMaterial(root)
@@ -284,6 +285,60 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
       const loader = new MaxLoader(manager)
       root = loader.parse(buffer)
       applyWhiteMaterial(root)
+      unit = 'cm'
+      break
+    }
+    case 'md': {
+      const bytes = new Uint8Array(buffer)
+      // Check if it is a PMD/PMX model mistakenly named .md
+      if (bytes.length >= 3 && bytes[0] === 0x50 && bytes[1] === 0x6d && bytes[2] === 0x64) { // 'Pmd'
+        const loader = new MMDLoader(manager)
+        loader.setResourcePath(toDirUrl(dir))
+        const mesh = await new Promise<THREE.SkinnedMesh>((resolve, reject) => {
+          const url = toModelUrl(filePath)
+          loader.load(url, (m) => resolve(m), undefined, (err) => reject(err))
+        })
+        root = mesh
+        unit = 'cm'
+        break
+      }
+      // Otherwise render an elegant Markdown document preview card in 3D scene
+      const text = new TextDecoder('utf-8').decode(bytes)
+      const lines = text.split('\n').slice(0, 10).map((l) => l.trim()).filter(Boolean)
+      const canvas = document.createElement('canvas')
+      canvas.width = 512
+      canvas.height = 340
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.fillStyle = '#1e293b'
+        ctx.fillRect(0, 0, 512, 340)
+        ctx.fillStyle = '#38bdf8'
+        ctx.font = 'bold 22px sans-serif'
+        ctx.fillText('Markdown 文档 (.md)', 30, 50)
+        ctx.fillStyle = '#cbd5e1'
+        ctx.font = '15px sans-serif'
+        let y = 90
+        for (const line of lines.slice(0, 7)) {
+          ctx.fillText(line.substring(0, 40), 30, y)
+          y += 28
+        }
+        ctx.fillStyle = '#94a3b8'
+        ctx.font = '13px monospace'
+        ctx.fillText('提示: 请选择同目录下的 3D 模型文件查看', 30, 310)
+      }
+      const dataUri = canvas.toDataURL('image/png')
+      const texture = new THREE.TextureLoader(manager).load(dataUri)
+      texture.colorSpace = THREE.SRGBColorSpace
+      const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide })
+      const geometry = new THREE.PlaneGeometry(100, 66.4)
+      geometry.translate(0, 33.2, 0)
+      geometry.computeVertexNormals()
+      geometry.computeBoundingBox()
+      const cardMesh = new THREE.Mesh(geometry, material)
+      cardMesh.name = 'C4DPreviewBoard' // Reuse preview board exemption in viewer
+      root = new THREE.Group()
+      root.name = 'MarkdownRoot'
+      root.add(cardMesh)
       unit = 'cm'
       break
     }

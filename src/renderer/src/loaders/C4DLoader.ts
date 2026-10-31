@@ -38,9 +38,37 @@ export class C4DLoader {
       if (previewBoard) {
         root.add(previewBoard)
       } else {
-        throw new Error(
-          '该 .c4d 文件未包含烘焙多边形缓存或预览数据。请在 Cinema 4D 首选项中开启“保存多边形以用于外部应用程序”，或将对象转为可编辑多边形后保存。'
-        )
+        // Fallback card if neither mesh nor embedded image is present
+        const canvas = document.createElement('canvas')
+        canvas.width = 512
+        canvas.height = 320
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+          ctx.fillStyle = '#0f172a'
+          ctx.fillRect(0, 0, 512, 320)
+          ctx.fillStyle = '#38bdf8'
+          ctx.font = 'bold 24px sans-serif'
+          ctx.fillText('Cinema 4D 工程文件 (.c4d)', 36, 70)
+          ctx.fillStyle = '#cbd5e1'
+          ctx.font = '16px sans-serif'
+          ctx.fillText('该文件由 Cinema 4D 保存，未包含烘焙多边形。', 36, 130)
+          ctx.fillText('请在 C4D 首选项开启“保存多边形以用于外部程序”，', 36, 170)
+          ctx.fillText('或将对象转为可编辑多边形，导出为 FBX/OBJ/glTF 查看。', 36, 205)
+          ctx.fillStyle = '#94a3b8'
+          ctx.font = '14px monospace'
+          ctx.fillText(`文件大小: ${(buffer.byteLength / 1024 / 1024).toFixed(2)} MB`, 36, 265)
+        }
+        const dataUri = canvas.toDataURL('image/png')
+        const texture = new THREE.TextureLoader(this.manager).load(dataUri)
+        texture.colorSpace = THREE.SRGBColorSpace
+        const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide })
+        const geometry = new THREE.PlaneGeometry(100, 62.5)
+        geometry.translate(0, 31.25, 0)
+        geometry.computeVertexNormals()
+        geometry.computeBoundingBox()
+        const fallbackMesh = new THREE.Mesh(geometry, material)
+        fallbackMesh.name = 'C4DPreviewBoard'
+        root.add(fallbackMesh)
       }
     }
 
