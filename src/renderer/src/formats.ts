@@ -27,15 +27,24 @@ export const EXPORT_FORMATS = ['obj', 'stl', 'fbx', 'glb', 'gltf', 'ply', 'pmx']
 // model:// 本地文件协议桥接
 // ---------------------------------------------------------------
 
-/** 将 Windows 绝对路径编码为 model:// URL（协议处理器在主进程按此 URL 读取文件） */
+/** 将 Windows 绝对路径编码为合法标准 model:// URL（严格规范化为正斜杠，盘符与各路径段独立转义，防止 Chromium Request 异常） */
 export function toModelUrl(absPath: string): string {
-  return 'model://local/' + encodeURIComponent(absPath)
+  const normalized = absPath.replace(/\\/g, '/')
+  const match = normalized.match(/^([A-Za-z]:)(\/.*)$/)
+  if (match) {
+    const drive = match[1]
+    const rest = match[2]
+    const encodedRest = rest.split('/').map((seg) => (seg ? encodeURIComponent(seg) : '')).join('/')
+    return `model://local/${drive}${encodedRest}`
+  }
+  const encoded = normalized.split('/').map((seg) => (seg ? encodeURIComponent(seg) : '')).join('/')
+  return `model://local/${encoded}`
 }
 
 /** 目录 URL（末尾保留分隔符，便于 three 拼接相对路径） */
 function toDirUrl(dir: string): string {
-  const d = dir.replace(/[\\/]+$/, '') + '\\'
-  return 'model://local/' + encodeURIComponent(d)
+  const d = dir.replace(/[\\/]+$/, '')
+  return toModelUrl(d) + '/'
 }
 
 /** 简易 Windows 路径拼接（渲染进程无法使用 node:path） */

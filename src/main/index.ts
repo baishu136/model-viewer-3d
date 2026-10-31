@@ -154,17 +154,19 @@ if (!gotTheLock) {
   app.whenReady().then(() => {
     // 将 model:// 协议映射到本地文件系统
     protocol.handle(SCHEME, async (request) => {
-      const url = new URL(request.url)
-      let p = decodeURIComponent(url.pathname)
-      if (p.startsWith('/')) p = p.slice(1)
-      p = p.replace(/\\/g, '/')
       try {
+        const url = new URL(request.url)
+        let p = decodeURIComponent(url.pathname)
+        if (/^\/[A-Za-z]:/.test(p)) {
+          p = p.slice(1)
+        }
+        p = path.normalize(p)
         const data = await fsp.readFile(p)
         return new Response(new Uint8Array(data), {
           headers: { 'Access-Control-Allow-Origin': '*' }
         })
       } catch {
-        return new Response('file not found: ' + p, { status: 404 })
+        return new Response('file not found: ' + request.url, { status: 404 })
       }
     })
 
