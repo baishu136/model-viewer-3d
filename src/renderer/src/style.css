@@ -302,3 +302,31 @@ canvas {
   font-size: 14px;
   color: var(--text-dim);
 }
+
+.animation-panel {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(640px, calc(100% - 32px));
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(6px);
+}
+
+.animation-controls, .animation-timeline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+#animation-clip { flex: 1; min-width: 0; }
+.animation-loop-label { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.animation-timeline { margin-top: 12px; }
+#animation-time { flex: 1; min-width: 0; accent-color: var(--accent); }
+#animation-time-label { min-width: 134px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-dim); }
+#app:has(.animation-panel:not([hidden])) .viewport-hint { bottom: 122px; }

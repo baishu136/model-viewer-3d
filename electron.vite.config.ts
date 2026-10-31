@@ -1,5 +1,6 @@
 import { defineConfig } from 'electron-vite'
 import { resolve } from 'path'
+import { modelOnlyFbx } from './scripts/model-only-fbx'
 
 export default defineConfig({
   main: {
@@ -19,6 +20,9 @@ export default defineConfig({
     }
   },
   renderer: {
+    plugins: [modelOnlyFbx()],
+    // Keep the loader visible to the model-only adapter in development as well.
+    optimizeDeps: { exclude: ['three/examples/jsm/loaders/FBXLoader.js'] },
     root: resolve(__dirname, 'src/renderer'),
     build: {
       outDir: 'out/renderer',

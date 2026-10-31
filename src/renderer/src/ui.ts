@@ -1,5 +1,5 @@
-import type { ModelStats, ViewMode } from './viewer'
-import { UNIT_TO_MM, type UnitKind } from './formats'
+import type { AnimationState, ModelStats, ViewMode } from './viewer'
+import { UNIT_TO_MM, SUPPORTED_EXTENSIONS, type UnitKind } from './formats'
 
 /** UI 交互层：HUD 更新、查看模式按钮、单位切换、拖放与导出入口 */
 export class UI {
@@ -14,6 +14,14 @@ export class UI {
   private opacityValue: HTMLOutputElement
   private modeButtons: NodeListOf<HTMLButtonElement>
   private dropOverlay: HTMLElement
+  private animationPanel = document.getElementById('animation-panel')!
+  private clipSelect = document.getElementById('animation-clip') as HTMLSelectElement
+  private playButton = document.getElementById('animation-play') as HTMLButtonElement
+  private timeline = document.getElementById('animation-time') as HTMLInputElement
+  private timeLabel = document.getElementById('animation-time-label')!
+  private speedSelect = document.getElementById('animation-speed') as HTMLSelectElement
+  private loopInput = document.getElementById('animation-loop') as HTMLInputElement
+  private animationClips: AnimationState['clips'] | null = null
 
   private currentStats: ModelStats | null = null
   private unit: UnitKind = 'mm'
@@ -52,8 +60,15 @@ export class UI {
       this.onModelOpacityChanged?.(opacity)
     })
 
+    this.clipSelect.addEventListener('change', () => this.onAnimationSelected?.(Number(this.clipSelect.value)))
+    this.playButton.addEventListener('click', () => this.onPlaybackToggle?.())
+    this.timeline.addEventListener('input', () => this.onAnimationSeek?.(Number(this.timeline.value)))
+    this.speedSelect.addEventListener('change', () => this.onAnimationSpeed?.(Number(this.speedSelect.value)))
+    this.loopInput.addEventListener('change', () => this.onAnimationLoop?.(this.loopInput.checked))
+
     window.addEventListener('keydown', (event) => {
-      if (event.ctrlKey || event.metaKey || event.altKey || event.target instanceof HTMLSelectElement) return
+      if (event.ctrlKey || event.metaKey || event.altKey ||
+        (event.target instanceof HTMLElement && event.target.closest('input, select, textarea, button, [contenteditable="true"]'))) return
       const mode = ({ '1': 'solid', '2': 'wire' } as Record<string, ViewMode | undefined>)[event.key]
       if (mode) {
         event.preventDefault()
@@ -61,6 +76,9 @@ export class UI {
       } else if (event.key.toLowerCase() === 'f' && !this.fitViewBtn.disabled) {
         event.preventDefault()
         this.onFitView?.()
+      } else if (event.code === 'Space' && !this.animationPanel.hidden) {
+        event.preventDefault()
+        this.onPlaybackToggle?.()
       }
     })
   }
@@ -72,6 +90,27 @@ export class UI {
   onExport?: () => void
   onFitView?: () => void
   onModelOpacityChanged?: (opacity: number) => void
+  onAnimationSelected?: (index: number) => void
+  onPlaybackToggle?: () => void
+  onAnimationSeek?: (time: number) => void
+  onAnimationSpeed?: (speed: number) => void
+  onAnimationLoop?: (loop: boolean) => void
+
+  updateAnimation(state: AnimationState): void {
+    this.animationPanel.hidden = state.clips.length === 0
+    if (this.animationClips !== state.clips) {
+      this.animationClips = state.clips
+      this.clipSelect.replaceChildren(...state.clips.map((clip, i) => new Option(clip.name, String(i))))
+    }
+    this.clipSelect.value = String(state.selected)
+    this.playButton.textContent = state.playing ? '暂停' : '播放'
+    this.playButton.setAttribute('aria-label', state.playing ? '暂停动画' : '播放动画')
+    this.timeline.max = String(state.duration)
+    this.timeline.value = String(state.time)
+    this.timeLabel.textContent = `${state.time.toFixed(2)} / ${state.duration.toFixed(2)} 秒`
+    this.speedSelect.value = String(state.speed)
+    this.loopInput.checked = state.loop
+  }
 
   setViewMode(mode: ViewMode): void {
     this.modeButtons.forEach((btn) => {
@@ -169,6 +208,6 @@ export class UI {
   }
 
   private isSupported(name: string): boolean {
-    return /\.(fbx|stl|obj|pmx|pmd)$/i.test(name)
+    return SUPPORTED_EXTENSIONS.includes(name.split('.').pop()?.toLowerCase() ?? '')
   }
 }

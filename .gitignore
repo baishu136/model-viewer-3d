@@ -9,6 +9,7 @@ dist/
 # 测试产物
 screenshots/
 testdata/export/
+testdata/compatibility/
 testdata/portable-probe/
 *.log
 

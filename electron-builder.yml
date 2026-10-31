@@ -26,10 +26,13 @@ nsis:
 fileAssociations:
   - ext:
       - fbx
+      - glb
+      - gltf
       - stl
       - obj
+      - ply
       - pmx
       - pmd
     name: 3D模型文件
-    description: 3D模型文件 (FBX/STL/OBJ/PMX/PMD)
+    description: 3D模型文件 (FBX/GLB/glTF/OBJ/STL/PLY/PMX/PMD)
     role: Editor

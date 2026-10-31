@@ -85,7 +85,7 @@ async function main() {
   await new Promise((r) => setTimeout(r, 400))
   const modalText = await win.evaluate(() => {
     const boxes = Array.from(document.querySelectorAll('div'))
-    const exportModal = boxes.find((b) => b.textContent?.includes('导出为') && b.offsetParent !== null)
+    const exportModal = boxes.find((b) => b.textContent?.includes('导出当前姿态') && b.offsetParent !== null)
     return exportModal?.textContent ?? ''
   })
   check('导出: 格式选择弹窗出现', modalText.includes('Wavefront OBJ') && modalText.includes('STL') && modalText.includes('FBX'))

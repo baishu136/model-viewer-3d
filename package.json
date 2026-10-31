@@ -1,7 +1,7 @@
 {
   "name": "model-viewer-3d",
-  "version": "0.1.0",
-  "description": "现代化 3D 模型查看器兼转换器，支持 FBX/STL/OBJ/PMX(PMD) 查看与相互转换",
+  "version": "0.2.0",
+  "description": "独立运行的 3D 模型与动画查看器，支持 FBX、GLB/glTF、OBJ、STL、PLY，以及静态 OBJ/STL/FBX 导出",
   "main": "./out/main/index.js",
   "type": "module",
   "author": "",
@@ -12,6 +12,7 @@
     "package": "electron-vite build && electron-builder --win",
     "test:models": "python scripts/gen_test_models.py",
     "test": "node scripts/tests/e2e-test.mjs",
+    "test:compatibility": "node scripts/tests/compatibility-test.mjs",
     "test:packaged": "node scripts/tests/final-verify.mjs",
     "test:installed": "node scripts/tests/test-installed.mjs",
     "test:portable": "node scripts/tests/test-portable.mjs",

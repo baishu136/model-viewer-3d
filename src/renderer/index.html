@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self' model:; style-src 'self' 'unsafe-inline'; img-src 'self' data: model:; connect-src 'self' model:; script-src 'self'"
+      content="default-src 'self' model:; style-src 'self' 'unsafe-inline'; img-src 'self' data: model:; connect-src 'self' model: data:; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:"
     />
     <title>3D模型查看器</title>
   </head>
@@ -47,7 +47,7 @@
         </div>
         <div class="toolbar-group">
           <label class="toolbar-label">导出</label>
-          <button id="export-btn" class="toolbar-btn" title="将当前模型导出为其他格式" disabled>导出…</button>
+          <button id="export-btn" class="toolbar-btn" title="将当前姿态导出为静态模型" disabled>导出…</button>
         </div>
       </div>
 
@@ -69,11 +69,32 @@
 
       <div class="viewport-hint">拖拽旋转 · 滚轮缩放 · 右键平移 · 1/2 切换视图 · F 适配</div>
 
+      <div id="animation-panel" class="animation-panel" aria-label="动画控制" hidden>
+        <div class="animation-controls">
+          <button id="animation-play" class="toolbar-btn" type="button" aria-label="播放动画">播放</button>
+          <label for="animation-clip">动画</label>
+          <select id="animation-clip" class="toolbar-select" aria-label="动画片段"></select>
+          <label for="animation-speed">速度</label>
+          <select id="animation-speed" class="toolbar-select" aria-label="播放速度">
+            <option value="0.25">0.25×</option>
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.5">1.5×</option>
+            <option value="2">2×</option>
+          </select>
+          <label class="animation-loop-label"><input id="animation-loop" type="checkbox" checked /> 循环</label>
+        </div>
+        <div class="animation-timeline">
+          <input id="animation-time" type="range" min="0" max="0" step="0.001" value="0" aria-label="动画时间" />
+          <output id="animation-time-label">0.00 / 0.00 秒</output>
+        </div>
+      </div>
+
       <!-- 拖放遮罩 -->
       <div id="drop-overlay" class="drop-overlay">
         <div class="drop-box">
           <div class="drop-title">释放以打开模型</div>
-          <div class="drop-sub">支持 .fbx .stl .obj .pmx .pmd</div>
+          <div class="drop-sub">支持 .fbx .glb .gltf .obj .stl .ply .pmx .pmd</div>
         </div>
       </div>
     </div>

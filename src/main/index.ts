@@ -3,8 +3,9 @@ import { execFile } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
+import { MODEL_EXTENSIONS } from '../shared/model-formats'
 
-const SUPPORTED_EXT = new Set(['.fbx', '.stl', '.obj', '.pmx', '.pmd'])
+const SUPPORTED_EXT = new Set(MODEL_EXTENSIONS.map((ext) => `.${ext}`))
 
 /**
  * 便携版文件关联：zip 解压即用版未经安装程序注册文件关联，
@@ -12,7 +13,7 @@ const SUPPORTED_EXT = new Set(['.fbx', '.stl', '.obj', '.pmx', '.pmd'])
  * 幂等——已注册的关联不会重复覆盖（可先读取比对）。
  */
 const FILE_ASSOC_CLASS = '3D模型查看器.Model'
-const FILE_ASSOC_EXT = ['.fbx', '.stl', '.obj', '.pmx', '.pmd']
+const FILE_ASSOC_EXT = [...SUPPORTED_EXT]
 
 function registerFileAssociations(): void {
   const exePath = process.execPath
@@ -23,7 +24,7 @@ function registerFileAssociations(): void {
       `HKCU\\Software\\Classes\\${FILE_ASSOC_CLASS}`,
       '/ve',
       '/d',
-      '3D模型文件 (FBX/STL/OBJ/PMX/PMD)',
+      '3D模型文件 (FBX/GLB/glTF/OBJ/STL/PLY/PMX/PMD)',
       '/f'
     ]
     const iconArgs = [

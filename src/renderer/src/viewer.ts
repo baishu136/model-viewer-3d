@@ -13,6 +13,16 @@ export interface ModelStats {
   hasModel: boolean
 }
 
+export interface AnimationState {
+  clips: Array<{ name: string; duration: number }>
+  selected: number
+  time: number
+  duration: number
+  playing: boolean
+  speed: number
+  loop: boolean
+}
+
 /**
  * 3D 查看器核心：管理场景、相机、网格/坐标轴、模型加载、自适应取景、
  * 单模型释放与查看模式切换。
@@ -29,9 +39,23 @@ export class Viewer {
 
   /** 当前场景中唯一的模型根节点 */
   private modelRoot: THREE.Object3D | null = null
+  private modelContainer = new THREE.Group()
   /** 线框叠加层（wire 模式） */
   private wireLayer: THREE.Object3D | null = null
   private sourceMaterials = new Set<THREE.Material>()
+  private wireMeshes: Array<{ source: THREE.Mesh; wire: THREE.Mesh }> = []
+  private pointMaterial = new THREE.PointsMaterial({ color: 0x555555, size: 2, sizeAttenuation: false })
+  private mixer: THREE.AnimationMixer | null = null
+  private clips: THREE.AnimationClip[] = []
+  private clipInfo: AnimationState['clips'] = []
+  private action: THREE.AnimationAction | null = null
+  private selectedClip = -1
+  private playing = false
+  private speed = 1
+  private loop = true
+  private clock = new THREE.Clock()
+  private lastAnimationUpdate = 0
+  private onAnimation?: (state: AnimationState) => void
 
   private mode: ViewMode = 'solid'
   private modelOpacity = 1
@@ -87,6 +111,69 @@ export class Viewer {
     this.onStats = cb
   }
 
+  setAnimationCallback(cb: (state: AnimationState) => void): void {
+    this.onAnimation = cb
+    this.emitAnimationState()
+  }
+
+  getAnimationState(): AnimationState {
+    return {
+      clips: this.clipInfo, selected: this.selectedClip,
+      time: this.action?.time ?? 0, duration: this.action?.getClip().duration ?? 0,
+      playing: this.playing, speed: this.speed, loop: this.loop
+    }
+  }
+
+  private emitAnimationState(): void {
+    this.onAnimation?.(this.getAnimationState())
+  }
+
+  selectAnimation(index: number): void {
+    if (!this.mixer || !this.clips[index]) return
+    this.mixer.stopAllAction()
+    this.selectedClip = index
+    this.action = this.mixer.clipAction(this.clips[index]).reset()
+    this.action.setLoop(this.loop ? THREE.LoopRepeat : THREE.LoopOnce, this.loop ? Infinity : 1)
+    this.action.clampWhenFinished = true
+    this.action.play()
+    this.action.paused = true
+    this.playing = false
+    this.mixer.update(0)
+    this.syncWireMeshes()
+    this.emitAnimationState()
+  }
+
+  togglePlayback(): void {
+    if (!this.action) return
+    if (!this.playing && this.action.time >= this.action.getClip().duration) this.action.reset().play()
+    this.playing = !this.playing
+    this.action.paused = !this.playing
+    this.emitAnimationState()
+  }
+
+  seekAnimation(time: number): void {
+    if (!this.action || !this.mixer) return
+    this.playing = false
+    this.action.enabled = true
+    this.action.paused = true
+    this.action.time = THREE.MathUtils.clamp(time, 0, this.action.getClip().duration)
+    this.mixer.update(0)
+    this.syncWireMeshes()
+    this.emitAnimationState()
+  }
+
+  setAnimationSpeed(speed: number): void {
+    if (!Number.isFinite(speed) || speed <= 0) return
+    this.speed = speed
+    this.emitAnimationState()
+  }
+
+  setAnimationLoop(loop: boolean): void {
+    this.loop = loop
+    this.action?.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1)
+    this.emitAnimationState()
+  }
+
   /** 设置查看模式 */
   setMode(mode: ViewMode): void {
     this.mode = mode
@@ -111,6 +198,15 @@ export class Viewer {
 
   private animate(): void {
     this.animationId = requestAnimationFrame(() => this.animate())
+    const delta = Math.min(this.clock.getDelta(), 0.1)
+    if (this.mixer && this.playing) {
+      this.mixer.update(delta * this.speed)
+      if (performance.now() - this.lastAnimationUpdate > 100) {
+        this.lastAnimationUpdate = performance.now()
+        this.emitAnimationState()
+      }
+    }
+    this.syncWireMeshes()
     this.controls.update()
     this.renderer.render(this.scene, this.camera)
   }
@@ -119,20 +215,36 @@ export class Viewer {
    * 替换场景中的模型：释放旧模型的所有资源，再添加新模型。
    * 确保场景永远只有一个模型。
    */
-  setModel(root: THREE.Object3D, fileName: string): void {
+  setModel(root: THREE.Object3D, fileName: string, clips: THREE.AnimationClip[] = [], scaleToMm = 1): void {
     this.removeModel()
     this.modelRoot = root
+    // Centre/scale a separate parent so animation tracks never overwrite viewer transforms.
+    this.modelContainer = new THREE.Group()
+    this.modelContainer.scale.setScalar(scaleToMm)
+    this.modelContainer.add(root)
     root.traverse((obj) => {
       obj.castShadow = false
       obj.receiveShadow = false
       const mesh = obj as THREE.Mesh
-      if (!mesh.isMesh) return
+      if (!mesh.isMesh && !(obj as THREE.Points).isPoints && !(obj as THREE.Line).isLine) return
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
       materials.filter((material): material is THREE.Material => Boolean(material)).forEach((material) => {
         this.sourceMaterials.add(material)
       })
     })
-    this.scene.add(root)
+    this.scene.add(this.modelContainer)
+    this.clips = clips.filter((clip) => clip.duration > 0 && clip.tracks.length > 0)
+    this.clipInfo = this.clips.map((clip, i) => ({ name: clip.name || `动画 ${i + 1}`, duration: clip.duration }))
+    if (this.clips.length) {
+      this.mixer = new THREE.AnimationMixer(root)
+      this.mixer.addEventListener('finished', () => {
+        this.playing = false
+        this.emitAnimationState()
+      })
+      this.selectAnimation(0)
+    } else {
+      this.emitAnimationState()
+    }
     this.fitCameraToModel()
     this.applyViewMode()
     this.updateStats(fileName)
@@ -140,14 +252,24 @@ export class Viewer {
 
   /** 移除模型并释放 GPU/内存资源 */
   removeModel(): void {
+    this.removeWireLayer()
+    this.mixer?.stopAllAction()
+    if (this.modelRoot) this.mixer?.uncacheRoot(this.modelRoot)
+    this.mixer = null
+    this.action = null
+    this.clips = []
+    this.clipInfo = []
+    this.selectedClip = -1
+    this.playing = false
     if (this.modelRoot) {
       this.disposeObject(this.modelRoot)
       this.sourceMaterials.forEach((material) => this.disposeMaterial(material))
       this.sourceMaterials.clear()
-      this.scene.remove(this.modelRoot)
+      this.scene.remove(this.modelContainer)
+      this.modelContainer.remove(this.modelRoot)
       this.modelRoot = null
     }
-    this.removeWireLayer()
+    this.emitAnimationState()
     if (this.onStats) {
       this.onStats({ fileName: '', faces: 0, vertices: 0, size: new THREE.Vector3(), hasModel: false })
     }
@@ -165,17 +287,15 @@ export class Viewer {
 
   /** 递归释放几何、材质、纹理（跳过共享的查看模式缓存材质） */
   private disposeObject(obj: THREE.Object3D): void {
+    const geometries = new Set<THREE.BufferGeometry>()
+    const skeletons = new Set<THREE.Skeleton>()
     obj.traverse((child) => {
       const mesh = child as THREE.Mesh
-      if (mesh.geometry) mesh.geometry.dispose()
-
-      const materials = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []
-      for (const mat of materials) {
-        if (!mat) continue
-        if (mat === this.solidMaterial) continue
-        this.disposeMaterial(mat)
-      }
+      if (mesh.geometry) geometries.add(mesh.geometry)
+      if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) skeletons.add((mesh as THREE.SkinnedMesh).skeleton)
     })
+    geometries.forEach((geo) => geo.dispose())
+    skeletons.forEach((skeleton) => skeleton.dispose())
   }
 
   private disposeMaterial(material: THREE.Material): void {
@@ -189,7 +309,10 @@ export class Viewer {
   /** 相机自动适配模型包围盒，模型居中到原点 */
   private fitCameraToModel(): void {
     if (!this.modelRoot) return
-    const box = new THREE.Box3().setFromObject(this.modelRoot)
+    // SkinnedMesh's inverse bind matrix must reflect the millimetre wrapper
+    // before computing deformed vertex bounds (updateWorldMatrix alone skips it).
+    this.modelContainer.updateMatrixWorld(true)
+    const box = new THREE.Box3().setFromObject(this.modelContainer, true)
     if (box.isEmpty()) return
 
     const center = box.getCenter(new THREE.Vector3())
@@ -198,7 +321,8 @@ export class Viewer {
 
     // 把模型中心平移到原点
     const offset = center.clone()
-    this.modelRoot.position.sub(offset)
+    this.modelContainer.position.sub(offset)
+    this.modelContainer.updateMatrixWorld(true)
 
     // 根据包围球直径确定相机距离
     const radius = Math.max(size.length() / 2, 1)
@@ -217,6 +341,9 @@ export class Viewer {
   /** 网格与坐标轴随模型尺寸自适应 */
   private updateGrid(maxDim: number): void {
     this.scene.remove(this.grid)
+    this.grid.geometry.dispose()
+    const materials = Array.isArray(this.grid.material) ? this.grid.material : [this.grid.material]
+    materials.forEach((material) => material.dispose())
     const gridSize = Math.max(100, Math.pow(10, Math.ceil(Math.log10(maxDim)))) * 1.5
     const divisions = 10
     this.grid = new THREE.GridHelper(gridSize, divisions, 0x9ca3af, 0xd1d5db)
@@ -247,6 +374,12 @@ export class Viewer {
     this.solidMaterial.depthWrite = this.modelOpacity === 1
     this.modelRoot.traverse((child) => {
       const mesh = child as THREE.Mesh
+      if ((child as THREE.Points).isPoints) {
+        (child as THREE.Points).material = this.pointMaterial
+        this.pointMaterial.opacity = this.modelOpacity
+        this.pointMaterial.transparent = this.modelOpacity < 1
+        return
+      }
       if (!mesh.isMesh) return
       mesh.material = this.solidMaterial!
       mesh.renderOrder = 1
@@ -266,20 +399,50 @@ export class Viewer {
       const mesh = child as THREE.Mesh
       if (!mesh.isMesh) return
       mesh.updateWorldMatrix(true, false)
-      const wire = new THREE.Mesh(mesh.geometry, this.frontWireMaterial)
+      let wire: THREE.Mesh
+      if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
+        const source = mesh as THREE.SkinnedMesh
+        const skinned = new THREE.SkinnedMesh(mesh.geometry, this.frontWireMaterial!)
+        skinned.bindMode = source.bindMode
+        skinned.skeleton = source.skeleton
+        skinned.bindMatrix.copy(source.bindMatrix)
+        skinned.bindMatrixInverse.copy(source.bindMatrixInverse)
+        wire = skinned
+      } else {
+        wire = new THREE.Mesh(mesh.geometry, this.frontWireMaterial!)
+      }
+      wire.morphTargetInfluences = mesh.morphTargetInfluences
+      wire.morphTargetDictionary = mesh.morphTargetDictionary
       wire.matrixAutoUpdate = false
       wire.matrix.copy(mesh.matrixWorld)
       wire.renderOrder = 3
+      wire.frustumCulled = false
       wireGroup.add(wire)
+      this.wireMeshes.push({ source: mesh, wire })
     })
     this.scene.add(wireGroup)
     this.wireLayer = wireGroup
   }
 
   private removeWireLayer(): void {
+    this.wireMeshes = []
     if (this.wireLayer) {
       this.scene.remove(this.wireLayer)
       this.wireLayer = null
+    }
+  }
+
+  /** Wire overlays share the current skeleton/morph pose and follow animated object transforms. */
+  private syncWireMeshes(): void {
+    if (!this.wireLayer || !this.modelRoot) return
+    this.modelRoot.updateWorldMatrix(true, true)
+    for (const { source, wire } of this.wireMeshes) {
+      wire.matrix.copy(source.matrixWorld)
+      wire.matrixWorldNeedsUpdate = true
+      wire.morphTargetInfluences = source.morphTargetInfluences
+      if ((wire as THREE.SkinnedMesh).isSkinnedMesh) {
+        (wire as THREE.SkinnedMesh).bindMatrixInverse.copy((source as THREE.SkinnedMesh).bindMatrixInverse)
+      }
     }
   }
 
@@ -294,11 +457,13 @@ export class Viewer {
 
     this.modelRoot.traverse((child) => {
       const mesh = child as THREE.Mesh
-      if (!mesh.isMesh) return
+      if (!mesh.isMesh && !(child as THREE.Points).isPoints) return
       const geo = mesh.geometry
       if (geo) {
-        if (geo.index) faces += geo.index.count / 3
-        else if (geo.attributes.position) faces += geo.attributes.position.count / 3
+        if (mesh.isMesh) {
+          if (geo.index) faces += geo.index.count / 3
+          else if (geo.attributes.position) faces += geo.attributes.position.count / 3
+        }
         if (geo.attributes.position) vertices += geo.attributes.position.count
         mesh.updateWorldMatrix(true, false)
         box.union(new THREE.Box3().setFromObject(mesh))
@@ -322,6 +487,7 @@ export class Viewer {
     this.removeModel()
     this.solidMaterial?.dispose()
     this.frontWireMaterial?.dispose()
+    this.pointMaterial.dispose()
     this.renderer.dispose()
   }
 
