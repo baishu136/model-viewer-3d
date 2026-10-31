@@ -9,15 +9,19 @@ import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js'
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
 import { OBJExporter } from 'three/examples/jsm/exporters/OBJExporter.js'
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js'
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
+import { PLYExporter } from 'three/examples/jsm/exporters/PLYExporter.js'
 import { FBXExporter } from '@comfyorg/fbx-exporter-three'
 import { MODEL_EXTENSIONS } from '../../shared/model-formats'
 import { BlendLoader } from './loaders/BlendLoader'
 import { MayaAsciiLoader } from './loaders/MayaAsciiLoader'
 import { MayaBinaryLoader } from './loaders/MayaBinaryLoader'
 import { C4DLoader } from './loaders/C4DLoader'
+import { MaxLoader } from './loaders/MaxLoader'
+import { PMXExporter } from './loaders/utils/PMXExporter'
 
 export const SUPPORTED_EXTENSIONS = MODEL_EXTENSIONS
-export const EXPORT_FORMATS = ['obj', 'stl', 'fbx']
+export const EXPORT_FORMATS = ['obj', 'stl', 'fbx', 'glb', 'gltf', 'ply', 'pmx']
 
 // ---------------------------------------------------------------
 // model:// 本地文件协议桥接
@@ -120,7 +124,7 @@ export async function detectUnit(filePath: string, buffer: ArrayBuffer): Promise
     if (u) return u
   }
   if (ext === 'blend') return 'm'
-  if (ext === 'ma' || ext === 'mb' || ext === 'c4d') return 'cm'
+  if (ext === 'ma' || ext === 'mb' || ext === 'c4d' || ext === 'max') return 'cm'
   return 'mm'
 }
 
@@ -142,7 +146,7 @@ function applyWhiteMaterial(object: THREE.Object3D): void {
   object.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       const mesh = child as THREE.Mesh
-      if (mesh.name === 'C4DPreviewBoard') return
+      if (mesh.name === 'C4DPreviewBoard' || mesh.name === 'MaxPreviewBoard') return
       mesh.material = makeMaterial()
       if (!mesh.geometry.getAttribute('normal')) {
         mesh.geometry.computeVertexNormals()
@@ -274,6 +278,13 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
       unit = 'cm'
       break
     }
+    case 'max': {
+      const loader = new MaxLoader(manager)
+      root = loader.parse(buffer)
+      applyWhiteMaterial(root)
+      unit = 'cm'
+      break
+    }
     default:
       throw new Error(`不支持的格式: .${ext}`)
   }
@@ -310,6 +321,30 @@ const FORMAT_INFO: Record<string, ExportFormatInfo> = {
     name: 'Autodesk FBX (二进制)',
     filters: [{ name: 'Autodesk FBX (*.fbx)', extensions: ['fbx'] }],
     defaultName: 'model.fbx'
+  },
+  glb: {
+    ext: 'glb',
+    name: 'glTF 2.0 二进制 (.glb)',
+    filters: [{ name: 'glTF 二进制模型 (*.glb)', extensions: ['glb'] }],
+    defaultName: 'model.glb'
+  },
+  gltf: {
+    ext: 'gltf',
+    name: 'glTF 2.0 文本 (.gltf)',
+    filters: [{ name: 'glTF 文本模型 (*.gltf)', extensions: ['gltf'] }],
+    defaultName: 'model.gltf'
+  },
+  ply: {
+    ext: 'ply',
+    name: 'PLY 几何体文件 (.ply)',
+    filters: [{ name: 'PLY 几何体文件 (*.ply)', extensions: ['ply'] }],
+    defaultName: 'model.ply'
+  },
+  pmx: {
+    ext: 'pmx',
+    name: 'MMD 模型文件 (.pmx)',
+    filters: [{ name: 'MMD 模型 (*.pmx)', extensions: ['pmx'] }],
+    defaultName: 'model.pmx'
   }
 }
 
@@ -370,6 +405,29 @@ export async function serializeModel(
       // Internal/viewer coordinates and the baked snapshot are in millimetres.
       const bytes = exporter.parseSync(work, { unitScale: 0.1, includeAnimations: false })
       data = bytes
+      break
+    }
+    case 'glb': {
+      const exporter = new GLTFExporter()
+      const result = await exporter.parseAsync(work, { binary: true })
+      data = new Uint8Array(result as ArrayBuffer)
+      break
+    }
+    case 'gltf': {
+      const exporter = new GLTFExporter()
+      const result = await exporter.parseAsync(work, { binary: false })
+      data = new TextEncoder().encode(JSON.stringify(result, null, 2))
+      break
+    }
+    case 'ply': {
+      const exporter = new PLYExporter()
+      const result = exporter.parse(work, ['position', 'normal'], { binary: true })
+      data = result instanceof DataView ? new Uint8Array(result.buffer) : new Uint8Array(result as ArrayBuffer)
+      break
+    }
+    case 'pmx': {
+      const exporter = new PMXExporter()
+      data = exporter.parse(work)
       break
     }
     default:

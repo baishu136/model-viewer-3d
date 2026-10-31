@@ -11,6 +11,7 @@ export const MODEL_EXTENSIONS = [
   'blend',
   'c4d',
   'ma',
-  'mb'
+  'mb',
+  'max'
 ]
 

@@ -119,7 +119,7 @@ async function main() {
     const { loadModelFile, serializeModel } = (window).__test
     const { root } = await loadModelFile(stlPath.replace(/\\/g, '/'))
     const out = {}
-    for (const fmt of ['obj', 'stl', 'fbx']) {
+    for (const fmt of ['obj', 'stl', 'fbx', 'glb', 'gltf', 'ply', 'pmx']) {
       try {
         const { data, info } = await serializeModel(fmt, root, 'test-cube')
         out[fmt] = { len: data.length, magic: data.length > 4 ? Array.from(data.slice(0, 5)) : null }
@@ -135,6 +135,10 @@ async function main() {
   check('导出: OBJ 序列化非空', (exportTest?.obj?.len ?? 0) > 100, `字节数: ${exportTest?.obj?.len}`)
   check('导出: STL 序列化非空', (exportTest?.stl?.len ?? 0) > 100, `字节数: ${exportTest?.stl?.len}`)
   check('导出: FBX 序列化非空', (exportTest?.fbx?.len ?? 0) > 100, `字节数: ${exportTest?.fbx?.len}`)
+  check('导出: GLB 序列化非空', (exportTest?.glb?.len ?? 0) > 100, `字节数: ${exportTest?.glb?.len}`)
+  check('导出: glTF 序列化非空', (exportTest?.gltf?.len ?? 0) > 100, `字节数: ${exportTest?.gltf?.len}`)
+  check('导出: PLY 序列化非空', (exportTest?.ply?.len ?? 0) > 100, `字节数: ${exportTest?.ply?.len}`)
+  check('导出: PMX 序列化非空', (exportTest?.pmx?.len ?? 0) > 100, `字节数: ${exportTest?.pmx?.len}`)
 
   // 将导出字节写入磁盘供人工检查（FBX 魔数等）
   const exportBytes = await win.evaluate(async (stlPath) => {

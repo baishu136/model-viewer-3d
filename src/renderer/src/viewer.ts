@@ -381,7 +381,7 @@ export class Viewer {
         return
       }
       if (!mesh.isMesh) return
-      if (mesh.name === 'C4DPreviewBoard') {
+      if (mesh.name === 'C4DPreviewBoard' || mesh.name === 'MaxPreviewBoard') {
         mesh.renderOrder = 1
         mesh.visible = true
         return
@@ -402,7 +402,7 @@ export class Viewer {
     const wireGroup = new THREE.Group()
     this.modelRoot.traverse((child) => {
       const mesh = child as THREE.Mesh
-      if (!mesh.isMesh || mesh.name === 'C4DPreviewBoard') return
+      if (!mesh.isMesh || mesh.name === 'C4DPreviewBoard' || mesh.name === 'MaxPreviewBoard') return
       mesh.updateWorldMatrix(true, false)
       let wire: THREE.Mesh
       if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {

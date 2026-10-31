@@ -1,6 +1,6 @@
 # 3D 模型查看器
 
-一款独立运行的 Windows 桌面模型与动画查看器，支持 FBX、GLB/glTF、OBJ、STL、PLY，以及原生 Blender (.blend)、Maya (.ma/.mb)、Cinema 4D (.c4d) 与 PMX/PMD 输入。无需安装或依赖任何大型 DCC 软件，毫秒级轻量加载。支持将当前姿态导出为静态 OBJ、STL 或 FBX。
+一款独立运行的 Windows 桌面模型与动画查看器，支持 FBX、GLB/glTF、OBJ、STL、PLY，以及原生 Blender (.blend)、Maya (.ma/.mb)、Cinema 4D (.c4d)、3ds Max (.max) 与 PMX/PMD 输入。无需安装或依赖任何大型 DCC 软件，毫秒级轻量加载。支持将当前姿态导出为静态 OBJ、STL 或 FBX。
 
 ## 功能特性
 
@@ -16,7 +16,7 @@
 - **单位切换**：mm / cm / m 下拉切换，尺寸显示与网格自适应联动
 
 ### 便捷的操作方式
-- **直接打开 3D 文件**：安装后双击 `.fbx / .glb / .gltf / .obj / .stl / .ply / .pmx / .pmd / .blend / .c4d / .ma / .mb` 文件即可用本软件打开
+- **直接打开 3D 文件**：安装后双击 `.fbx / .glb / .gltf / .obj / .stl / .ply / .pmx / .pmd / .blend / .c4d / .ma / .mb / .max` 文件即可用本软件打开
 - **拖放加载**：将模型文件拖入窗口即可查看
 - **单模型场景**：加载第二个文件时**立即卸载第一个**，场景永远只有一个模型，内存不泄漏
 - **单实例聚焦**：软件已运行时再次双击文件 → 聚焦现有窗口并切换为新模型
@@ -24,9 +24,9 @@
 - **快捷键**：`1` 白模、`2` 布线、`F` 适配视图、`空格` 播放/暂停（焦点位于查看区域时）
 
 ### 格式转换
-- **输入**：FBX / GLB / glTF / OBJ / STL（二进制与 ASCII）/ PLY / PMX / PMD / BLEND / C4D / MA / MB
-- **输出**：OBJ / STL（二进制）/ FBX（二进制，兼容 Unity/Unreal/Blender/Maya）
-- 转换通过界面"导出…"入口完成，骨骼及形态动画按当前显示姿态烘焙为静态网格；此入口不导出动画。仅含点或线的模型不能导出为三角网格。
+- **输入**：FBX / GLB / glTF / OBJ / STL（二进制与 ASCII）/ PLY / PMX / PMD / BLEND / C4D / MA / MB / MAX
+- **输出**：OBJ / STL（二进制）/ FBX（二进制，兼容 Unity/Unreal/Blender/Maya）/ GLB / glTF / PLY / PMX（MMD）
+- 转换通过界面"导出…"入口完成，支持将当前加载的模型（包括 Blender、Maya、Cinema 4D 等原生工程）烘焙为任意上述标准三维格式；骨骼及形态动画按当前显示姿态烘焙为静态网格。仅含点或线的模型不能导出为三角网格。
 
 ## 技术栈
 
@@ -100,8 +100,8 @@ release/                 # 本地打包产物（不提交到 Git）
 
 - **PMX 仅作输入**：PMX/PMD 为 MMD 私有格式，开源生态无可靠写入器，故仅支持加载查看；导出目标为 OBJ/STL/FBX。
 - **单位约定**：GLB/glTF 按标准使用米，载入后转换为内部毫米；FBX 按识别到的 UnitScaleFactor 转换。OBJ/STL/PLY/PMX/PMD 无可识别单位时默认按毫米解释。单位下拉框只切换显示单位。
-- **DCC 软件格式原生兼容**：内置轻量原生几何体解析器，直接解析 `.blend` (SDNA)、`.ma` (MEL 语句)、`.mb` (IFF 数据块) 以及 `.c4d` (PolygonObject 烘焙缓存)，无需安装任何外部软件，毫秒级快速提取多边形网格渲染。因面数过高或闭源限制，暂不支持 3ds Max (.max) 与 ZBrush (.ztl/.zpr)。
-- **动画范围**：播放文件内已有的关键帧、骨骼蒙皮和形态动画；原软件的 IK、约束、修改器或物理模拟需要先烘焙。OBJ/STL/PLY/BLEND/C4D/MA/MB 为静态网格输入。
+- **DCC 软件格式原生兼容**：内置轻量原生几何体与视口解析器，直接解析 `.blend` (SDNA)、`.ma` (MEL 语句)、`.mb` (IFF 数据块)、`.c4d` (PolygonObject 烘焙缓存与全彩展板) 以及 `.max` (3ds Max 视口模型与拓扑布线展板)，无需安装任何外部 3D 软件，毫秒级快速提取渲染。
+- **动画范围**：播放文件内已有的关键帧、骨骼蒙皮和形态动画；原软件的 IK、约束、修改器或物理模拟需要先烘焙。OBJ/STL/PLY/BLEND/C4D/MA/MB/MAX 为静态网格输入。
 - **glTF 附属文件**：`.gltf` 引用的 `.bin` 几何/动画数据必须保留相对目录；材质和贴图不需要。GLB 通常将数据打包在单个文件内。
 
 ## 赞助与支持
