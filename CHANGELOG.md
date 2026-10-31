@@ -1,5 +1,14 @@
 # 更新日志
 
+## v0.3.0 — 2026-10-31
+
+- 新增 Blender 原生格式 (`.blend`) 支持，通过内置轻量 SDNA 解析器直接解包几何多边形网格，支持 Blender 2.80+ 及 4.x/5.x。
+- 新增 Maya ASCII (`.ma`) 与 Maya Binary (`.mb`) 支持，内置纯 TypeScript 流式 MEL 分词器与 IFF Chunk 解析器，毫秒级提取几何体。
+- 新增 Cinema 4D (`.c4d`) 支持，直接提取文件内部烘焙的 PolygonObject 点面缓存。
+- 零外部软件依赖：无需在 Windows 上安装 Blender、Maya 或 Cinema 4D，加载速度与 OBJ/FBX/STL 保持同等毫秒级响应。
+- 新增 Windows 文件关联注册支持：`.blend`、`.c4d`、`.ma`、`.mb`。
+- 新增 4 种新格式自动化回归与兼容性测试套件（兼容性检查项增至 34 项全部通过）。
+
 ## v0.2.0 — 2026-10-31
 
 - 新增 GLB/glTF 模型输入，支持外置 `.bin`、内嵌数据，以及离线 Draco、Meshopt 解码。

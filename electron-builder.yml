@@ -33,6 +33,10 @@ fileAssociations:
       - ply
       - pmx
       - pmd
+      - blend
+      - c4d
+      - ma
+      - mb
     name: 3D模型文件
-    description: 3D模型文件 (FBX/GLB/glTF/OBJ/STL/PLY/PMX/PMD)
+    description: 3D模型文件 (FBX/GLB/glTF/OBJ/STL/PLY/PMX/PMD/BLEND/C4D/MA/MB)
     role: Editor
