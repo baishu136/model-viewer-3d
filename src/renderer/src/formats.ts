@@ -2,7 +2,6 @@ import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
-import { MMDLoader } from 'three/examples/jsm/loaders/MMDLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js'
@@ -20,9 +19,12 @@ import { C4DLoader } from './loaders/C4DLoader'
 import { MaxLoader } from './loaders/MaxLoader'
 import { Fbx6Loader } from './loaders/Fbx6Loader'
 import { PMXExporter } from './loaders/utils/PMXExporter'
+import { isMmdModel, parseMmdModel } from './loaders/MmdModelLoader'
+import { compactSceneGeometry } from './loaders/utils/compact-geometry'
+import { StaticVRMExporter } from './loaders/utils/StaticVRMExporter'
 
 export const SUPPORTED_EXTENSIONS = MODEL_EXTENSIONS
-export const EXPORT_FORMATS = ['obj', 'stl', 'fbx', 'glb', 'gltf', 'ply', 'pmx']
+export const EXPORT_FORMATS = ['obj', 'stl', 'fbx', 'glb', 'gltf', 'ply', 'pmx', 'vrm']
 
 // ---------------------------------------------------------------
 // model:// 本地文件协议桥接
@@ -133,7 +135,7 @@ export async function detectUnit(filePath: string, buffer: ArrayBuffer): Promise
     const u = detectFbxUnit(buffer)
     if (u) return u
   }
-  if (ext === 'blend' || ext === 'blender') return 'm'
+  if (ext === 'blend' || ext === 'blender' || ext === 'glb' || ext === 'gltf' || ext === 'vrm') return 'm'
   if (ext === 'ma' || ext === 'mb' || ext === 'c4d' || ext === 'max' || ext === 'pmx' || ext === 'pmd' || ext === 'md') return 'cm'
   return 'mm'
 }
@@ -158,16 +160,44 @@ function makeMaterial(): THREE.Material {
 }
 
 function applyWhiteMaterial(object: THREE.Object3D): void {
+  const oldMaterials = new Set<THREE.Material>()
   object.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       const mesh = child as THREE.Mesh
       if (mesh.name === 'MarkdownPreviewCard') return
+      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) oldMaterials.add(material)
       mesh.material = makeMaterial()
       if (!mesh.geometry.getAttribute('normal')) {
         mesh.geometry.computeVertexNormals()
       }
     }
   })
+  oldMaterials.forEach((material) => material.dispose())
+}
+
+/** Reject empty/invalid parses instead of displaying a blank or exploding model as a successful load. */
+function validateModel(root: THREE.Object3D): void {
+  let vertices = 0
+  root.updateMatrixWorld(true)
+  root.traverse((object) => {
+    if (!object.matrixWorld.elements.every(Number.isFinite)) throw new Error(`模型节点 ${object.name || ''} 含无效变换。`)
+    const mesh = object as THREE.Mesh
+    if (!mesh.isMesh && !(object as THREE.Points).isPoints && !(object as THREE.Line).isLine) return
+    const position = mesh.geometry?.getAttribute('position')
+    if (!position) return
+    vertices += position.count
+    for (let i = 0; i < position.count; i++) {
+      if (!Number.isFinite(position.getX(i)) || !Number.isFinite(position.getY(i)) || !Number.isFinite(position.getZ(i))) {
+        throw new Error(`模型 ${object.name || ''} 含无效顶点坐标，无法正常显示。`)
+      }
+    }
+    const indices = mesh.geometry.getIndex()
+    if (indices) for (let i = 0; i < indices.count; i++) {
+      if (indices.getX(i) >= position.count || indices.getX(i) < 0) throw new Error('模型面索引超出顶点范围，文件可能损坏或包含尚未支持的数据。')
+    }
+    if (mesh.isMesh && !mesh.geometry.getAttribute('normal')) mesh.geometry.computeVertexNormals()
+  })
+  if (vertices === 0) throw new Error('该文件未解析到可显示的几何数据。原生工程可能需要先烘焙修改器或导出为 FBX/GLB。')
 }
 
 /** 判断是否为 three.js FBXLoader 无法处理的旧版二进制 FBX（FileVersion < 7000） */
@@ -230,13 +260,21 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
       break
     }
     case 'glb':
-    case 'gltf': {
+    case 'gltf':
+    case 'vrm': {
       const loader = new GLTFLoader(manager)
+      let vrmVersion: string | null = null
       loader.setDRACOLoader(dracoLoader)
       loader.setMeshoptDecoder(MeshoptDecoder)
       loader.register((parser) => ({
         name: 'VIEWER_geometry_only',
         beforeRoot: () => {
+          const extensions = parser.json.extensions ?? {}
+          if (extensions.VRMC_vrm) {
+            vrmVersion = extensions.VRMC_vrm.specVersion
+            if (!vrmVersion?.startsWith('1.0')) throw new Error(`暂不支持 VRM 版本：${vrmVersion}`)
+          } else if (extensions.VRM) vrmVersion = '0'
+          else if (ext === 'vrm') throw new Error('该 .vrm 文件未包含 VRM 0.x / 1.0 扩展信息。')
           // Retain the nodes and their transforms, but never instantiate file cameras/lights.
           for (const node of parser.json.nodes ?? []) {
             delete node.camera
@@ -250,6 +288,16 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
       }))
       const gltf = await loader.parseAsync(buffer, '')
       root = gltf.scene
+      if (vrmVersion) {
+        compactSceneGeometry(root)
+        // VRM 0 faces -Z; VRM 1 faces +Z. Rotate a wrapper so animated root tracks cannot undo it.
+        const avatar = new THREE.Group()
+        avatar.name = 'VrmRoot'
+        avatar.userData.vrmVersion = vrmVersion
+        avatar.rotation.y = vrmVersion === '0' ? Math.PI : 0
+        avatar.add(root)
+        root = avatar
+      }
       animations = gltf.animations
       unit = 'm' // glTF coordinates are in metres.
       break
@@ -273,15 +321,7 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
     }
     case 'pmx':
     case 'pmd': {
-      const loader = new MMDLoader(manager)
-      // MMDLoader 0.171 无公开 parse，必须走 URL 加载；model:// 协议在渲染进程可 fetch。
-      // 相对纹理路径由 resourcePath（模型目录 URL）拼接。
-      loader.setResourcePath(toDirUrl(dir))
-      const mesh = await new Promise<THREE.SkinnedMesh>((resolve, reject) => {
-        const url = toModelUrl(filePath)
-        loader.load(url, (m) => resolve(m), undefined, (err) => reject(err))
-      })
-      root = mesh
+      root = parseMmdModel(buffer, manager, makeMaterial)
       break
     }
     case 'blend':
@@ -296,8 +336,9 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
       const text = new TextDecoder('utf-8').decode(new Uint8Array(buffer))
       const loader = new MayaAsciiLoader(manager)
       root = loader.parse(text)
+      compactSceneGeometry(root)
       applyWhiteMaterial(root)
-      unit = 'cm'
+      unit = loader.unit
       break
     }
     case 'mb': {
@@ -324,14 +365,8 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
     case 'md': {
       const bytes = new Uint8Array(buffer)
       // Check if it is a PMD/PMX model mistakenly named .md
-      if (bytes.length >= 3 && bytes[0] === 0x50 && bytes[1] === 0x6d && bytes[2] === 0x64) { // 'Pmd'
-        const loader = new MMDLoader(manager)
-        loader.setResourcePath(toDirUrl(dir))
-        const mesh = await new Promise<THREE.SkinnedMesh>((resolve, reject) => {
-          const url = toModelUrl(filePath)
-          loader.load(url, (m) => resolve(m), undefined, (err) => reject(err))
-        })
-        root = mesh
+      if (isMmdModel(buffer)) {
+        root = parseMmdModel(buffer, manager, makeMaterial)
         unit = 'cm'
         break
       }
@@ -359,8 +394,7 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
         ctx.font = '13px monospace'
         ctx.fillText('提示: 请选择同目录下的 3D 模型文件查看', 30, 310)
       }
-      const dataUri = canvas.toDataURL('image/png')
-      const texture = new THREE.TextureLoader(manager).load(dataUri)
+      const texture = new THREE.CanvasTexture(canvas)
       texture.colorSpace = THREE.SRGBColorSpace
       const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide })
       const geometry = new THREE.PlaneGeometry(100, 66.4)
@@ -379,6 +413,14 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
       throw new Error(`不支持的格式: .${ext}`)
   }
 
+  try { validateModel(root) } catch (error) {
+    root.traverse((object) => {
+      const mesh = object as THREE.Mesh
+      mesh.geometry?.dispose()
+      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) material?.dispose()
+    })
+    throw error
+  }
   return { root, unit, animations }
 }
 
@@ -435,7 +477,17 @@ const FORMAT_INFO: Record<string, ExportFormatInfo> = {
     name: 'MMD 模型文件 (.pmx)',
     filters: [{ name: 'MMD 模型 (*.pmx)', extensions: ['pmx'] }],
     defaultName: 'model.pmx'
+  },
+  vrm: {
+    ext: 'vrm',
+    name: 'VRM 1.0 静态模型（基础骨架）',
+    filters: [{ name: 'VRM 静态模型 (*.vrm)', extensions: ['vrm'] }],
+    defaultName: 'model.vrm'
   }
+}
+
+export function getExportFormats(): ExportFormatInfo[] {
+  return EXPORT_FORMATS.map((format) => FORMAT_INFO[format])
 }
 
 /** 序列化导出数据（blob 字节），不写盘 */
@@ -467,18 +519,34 @@ export async function serializeModel(
       geo.morphAttributes = {}
       geo.computeVertexNormals()
     }
+    // Static snapshots have already baked the pose; do not emit skin attributes without a skin.
+    geo.deleteAttribute('skinIndex')
+    geo.deleteAttribute('skinWeight')
+    geo.morphAttributes = {}
     const m = mesh.matrixWorld.clone()
     // 世界变换烘焙进几何，导出时 newMesh 位于世界原点，避免坐标错位
     geo.applyMatrix4(m)
+    if (m.determinant() < 0) {
+      if (!geo.index) geo.setIndex(Array.from({ length: geo.getAttribute('position').count }, (_, i) => i))
+      for (let i = 0; i < geo.index!.count; i += 3) {
+        const b = geo.index!.getX(i + 1)
+        geo.index!.setX(i + 1, geo.index!.getX(i + 2)); geo.index!.setX(i + 2, b)
+      }
+    }
+    // glTF uses metres; MMD uses the viewer's centimetre convention. All other snapshot formats use mm.
+    if (format === 'glb' || format === 'gltf' || format === 'vrm') geo.scale(0.001, 0.001, 0.001)
+    else if (format === 'pmx') geo.scale(0.1, 0.1, 0.1)
     const orig = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
     const newMesh = new THREE.Mesh(geo, orig ?? makeMaterial())
+    newMesh.name = mesh.name || `Mesh_${work.children.length + 1}`
     work.add(newMesh)
   })
 
   if (!work.children.length) throw new Error('当前文件只有点或线，无法导出为三角网格。')
 
   let data: Uint8Array
-  switch (format) {
+  try {
+    switch (format) {
     case 'obj': {
       const text = new OBJExporter().parse(work)
       data = new TextEncoder().encode(text)
@@ -511,8 +579,9 @@ export async function serializeModel(
     }
     case 'ply': {
       const exporter = new PLYExporter()
-      const result = exporter.parse(work, ['position', 'normal'], { binary: true })
-      data = result instanceof DataView ? new Uint8Array(result.buffer) : new Uint8Array(result as ArrayBuffer)
+      const result = exporter.parse(work, () => {}, { binary: true, littleEndian: true })
+      if (!result) throw new Error('PLY 导出失败：没有可导出的顶点。')
+      data = new Uint8Array(result)
       break
     }
     case 'pmx': {
@@ -520,8 +589,15 @@ export async function serializeModel(
       data = exporter.parse(work)
       break
     }
+    case 'vrm': {
+      data = await new StaticVRMExporter().parse(work, baseName.replace(/\.[^.]+$/, ''))
+      break
+    }
     default:
       throw new Error(`不支持的导出格式: ${format}`)
+    }
+  } finally {
+    work.traverse((object) => { (object as THREE.Mesh).geometry?.dispose() })
   }
 
   const extName = baseName.replace(/\.[^.]+$/, '')

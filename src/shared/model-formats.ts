@@ -3,6 +3,7 @@ export const MODEL_EXTENSIONS = [
   'fbx',
   'glb',
   'gltf',
+  'vrm',
   'obj',
   'stl',
   'ply',

@@ -9,9 +9,10 @@ const fixtures = await createModelFixtures(root)
 const env = { ...process.env }
 delete env.ELECTRON_RUN_AS_NODE
 delete env.ELECTRON_EXEC_PATH
-const packaged = process.argv.includes('--packaged')
+const exeArgument = process.argv.find((arg) => arg.startsWith('--exe='))?.slice(6)
+const packaged = process.argv.includes('--packaged') || !!exeArgument
 const app = await electron.launch({
-  executablePath: path.join(root, packaged ? 'release/win-unpacked/3D模型查看器.exe' : 'node_modules/electron/dist/electron.exe'),
+  executablePath: exeArgument || path.join(root, packaged ? 'release/win-unpacked/3D模型查看器.exe' : 'node_modules/electron/dist/electron.exe'),
   args: [...(packaged ? [] : [path.join(root, 'out/main/index.js')]), path.join(fixtures, 'animated.glb')], cwd: root, env
 })
 let passed = 0

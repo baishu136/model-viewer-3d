@@ -28,6 +28,7 @@ fileAssociations:
       - fbx
       - glb
       - gltf
+      - vrm
       - stl
       - obj
       - ply
@@ -41,5 +42,5 @@ fileAssociations:
       - max
       - md
     name: 3D模型文件
-    description: 3D模型文件 (FBX/GLB/glTF/OBJ/STL/PLY/PMX/PMD/BLEND/C4D/MA/MB/MAX/MD)
+    description: 3D模型文件 (FBX/GLB/glTF/VRM/OBJ/STL/PLY/PMX/PMD/BLEND/C4D/MA/MB/MAX/MD)
     role: Editor

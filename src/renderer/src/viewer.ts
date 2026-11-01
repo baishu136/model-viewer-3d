@@ -296,13 +296,15 @@ export class Viewer {
       const mesh = obj as THREE.Mesh
       if (!mesh.isMesh && !(obj as THREE.Points).isPoints && !(obj as THREE.Line).isLine) return
 
-      // Fix: If mesh has morphAttributes but no active morph tracks in clips,
-      // clear morphAttributes to avoid Three.js shader crash ('MORPHTARGETS_COUNT' undeclared)
-      if (mesh.geometry?.morphAttributes && (!this.clips.length || !mesh.morphTargetInfluences?.length)) {
-        mesh.geometry.morphAttributes = {}
-        mesh.morphTargetInfluences = undefined
-        mesh.morphTargetDictionary = undefined
+      // Static VRM/MMD models can have valid expression morphs without animation clips.
+      // Retain those targets and their default weights; initialise only missing influence arrays.
+      // MMD also emits empty target arrays: their presence enables a shader define with count=0.
+      // Remove only those empty placeholders, rather than deleting valid static expressions.
+      for (const [name, targets] of Object.entries(mesh.geometry?.morphAttributes || {})) {
+        if (targets.length === 0) delete mesh.geometry.morphAttributes[name]
       }
+      const morphCount = mesh.geometry?.morphAttributes.position?.length || 0
+      if (morphCount > 0 && mesh.morphTargetInfluences?.length !== morphCount) mesh.updateMorphTargets()
 
       // Ensure SkinnedMesh skeleton matrices are updated
       if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {

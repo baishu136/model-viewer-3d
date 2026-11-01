@@ -254,9 +254,17 @@ export class PMXExporter {
     view.setInt32(offset, indexCount, true)
     offset += 4
 
-    // Bones: 0
-    view.setInt32(offset, 0, true)
+    // BDEF1 vertices reference bone 0, so a real root bone must exist for skinning.
+    view.setInt32(offset, 1, true)
     offset += 4
+    const rootName = encoder.encode('Root')
+    writeText(rootName)
+    writeText(rootName)
+    for (let i = 0; i < 3; i++) { view.setFloat32(offset, 0, true); offset += 4 }
+    u8[offset++] = 0xff // parent = -1
+    view.setInt32(offset, 0, true); offset += 4 // transform layer
+    view.setUint16(offset, 0x001a, true); offset += 2 // rotatable, visible, enabled; offset tail
+    for (const value of [0, 1, 0]) { view.setFloat32(offset, value, true); offset += 4 }
 
     // Morphs: 0
     view.setInt32(offset, 0, true)

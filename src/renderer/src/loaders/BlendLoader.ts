@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import * as fzstd from 'fzstd'
 import { BinaryReader } from './utils/binary-reader'
-import { fanTriangulate } from './utils/triangulation'
+import { triangulatePolygon } from './utils/triangulation'
 
 interface BlendBlock {
   code: string
@@ -153,8 +153,8 @@ export class BlendLoader {
     const sdna = this.parseSDNA(reader, dnaBlock, ptrBytes)
 
     // 4. Extract Meshes
-    const meshBlocks = blocks.filter((b) => b.code.startsWith('ME'))
-    const objectBlocks = blocks.filter((b) => b.code.startsWith('OB'))
+    const meshBlocks = blocks.filter((b) => b.code.startsWith('ME') && sdna.structNames[b.sdnaIndex] === 'Mesh')
+    const objectBlocks = blocks.filter((b) => b.code.startsWith('OB') && sdna.structNames[b.sdnaIndex] === 'Object')
 
     if (objectBlocks.length > 0 && sdna.structs.has('Object')) {
       const objStruct = sdna.structs.get('Object')!
@@ -219,7 +219,7 @@ export class BlendLoader {
     reader: BinaryReader,
     dnaBlock: BlendBlock,
     ptrBytes: number
-  ): { names: string[]; types: string[]; typeLens: number[]; structs: Map<string, SDNAStruct> } {
+  ): { names: string[]; types: string[]; typeLens: number[]; structNames: string[]; structs: Map<string, SDNAStruct> } {
     reader.seek(dnaBlock.offset)
 
     const magic = reader.readAscii(4)
@@ -282,11 +282,13 @@ export class BlendLoader {
     reader.readAscii(4) // 'STRC'
     const structCount = reader.readUint32()
     const structs = new Map<string, SDNAStruct>()
+    const structNames: string[] = []
 
     for (let i = 0; i < structCount; i++) {
       const typeIdx = reader.readUint16()
       const fieldCount = reader.readUint16()
       const typeName = types[typeIdx]
+      structNames.push(typeName)
       let currentOffset = 0
       const fields: Record<string, { type: string; name: string; offset: number; size: number }> = {}
 
@@ -320,12 +322,13 @@ export class BlendLoader {
 
       structs.set(typeName, {
         type: typeName,
-        size: currentOffset,
+        // Array element stride is the SDNA TLEN, including trailing structure padding.
+        size: typeLens[typeIdx],
         fields
       })
     }
 
-    return { names, types, typeLens, structs }
+    return { names, types, typeLens, structNames, structs }
   }
 
   private parseMeshBlock(
@@ -458,7 +461,7 @@ export class BlendLoader {
               polyIndices.push(idx)
             }
           }
-          fanTriangulate(polyIndices, indices)
+          triangulatePolygon(polyIndices, vertices, indices)
         }
       }
     }
@@ -495,7 +498,7 @@ export class BlendLoader {
               }
             }
           }
-          fanTriangulate(polyIndices, indices)
+          triangulatePolygon(polyIndices, vertices, indices)
         }
       }
     }

@@ -67,52 +67,51 @@ export class MaxLoader {
     // 3. 组装场景
     const axisMatrix = new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1)
 
-    // 判断本文件是否需要叠加节点平移（有一部分资产已把世界坐标烘进顶点）
-    const sceneUsesNodeTransform = this.sceneUsesNodeTransform(meshes, nodeInfo.matrices, axisMatrix)
-
-    for (let i = 0; i < meshes.length; i++) {
-      const entry = meshes[i]
-      const nodeMatrix = nodeInfo.matrices.get(entry.ownerItem) || new THREE.Matrix4()
-
-      // 只有旋转/缩放的节点必定要叠加（如 FBX 导入角色的 90° 立正）；带平移的节点
-      // 则由 sceneUsesNodeTransform 判定是否已经烘焙进顶点。
-      const useNodeTransform = !this.hasTranslation(nodeMatrix) || sceneUsesNodeTransform
-      const transform = axisMatrix.clone().multiply(useNodeTransform ? nodeMatrix : new THREE.Matrix4())
-
+    const meshesByOwner = new Map<number, MaxMeshEntry[]>()
+    for (const entry of meshes) {
+      const entries = meshesByOwner.get(entry.ownerItem) || []
+      entries.push(entry)
+      meshesByOwner.set(entry.ownerItem, entries)
+    }
+    const addMesh = (entry: MaxMeshEntry, matrix: THREE.Matrix4, name: string): void => {
+      const transform = axisMatrix.clone().multiply(matrix)
       const geometry = this.buildGeometry(entry.positions, entry.indices)
       geometry.applyMatrix4(transform)
+      // 镜像节点烘焙到顶点后，需要同时翻转绕序，保留外向法线。
+      if (transform.determinant() < 0) this.reverseWinding(geometry)
       geometry.computeVertexNormals()
       geometry.computeBoundingBox()
-
       const mesh = new THREE.Mesh(geometry)
-      mesh.name = nodeInfo.names.get(entry.ownerItem) || entry.name || `MaxMesh_${i}`
+      mesh.name = name
       root.add(mesh)
     }
 
-    // 4. 修改器生成的对象（例如“闭合样条 + 挤出”）在 .max 中没有烘焙网格，
-    //    但样条控制点保存在修改器的 0x290a 块里，可据此重建轮廓面片。
-    const meshOwners = new Set(meshes.map((m) => m.ownerItem))
+    // 按节点实例化，而非按共享网格只摆放一次。ObjectTM = NodeWorldTM * ObjectOffsetTM；
+    // 不再按网格中心的疏密猜测是否丢弃变换，轴心偏移也不会传给子节点。
     for (const node of nodeInfo.nodes) {
-      let hasMesh = false
-      for (const target of node.targets) {
-        if (meshOwners.has(target)) {
-          hasMesh = true
-          break
-        }
+      const entries = [...node.targets].flatMap((target) => meshesByOwner.get(target) || [])
+      for (const entry of entries) {
+        addMesh(entry, node.matrix, node.name || `MaxMesh_${root.children.length}`)
       }
-      if (hasMesh) continue
+      if (entries.length > 0) continue
 
+      // 未保存烘焙网格的闭合样条，仍可重建其轮廓面。
       const spline = this.buildSplineMesh(view, items, node.targets)
       if (!spline) continue
-
-      const transform = axisMatrix.clone().multiply(sceneUsesNodeTransform ? node.matrix : new THREE.Matrix4())
+      const transform = axisMatrix.clone().multiply(node.matrix)
       spline.applyMatrix4(transform)
+      if (transform.determinant() < 0) this.reverseWinding(spline)
       spline.computeVertexNormals()
       spline.computeBoundingBox()
 
       const mesh = new THREE.Mesh(spline)
       mesh.name = node.name || 'MaxSpline'
       root.add(mesh)
+    }
+
+    // 兼容只保存网格、没有 INode 的旧文件；有节点时不显示已脱离场景的缓存网格。
+    if (nodeInfo.nodes.length === 0) {
+      meshes.forEach((entry, i) => addMesh(entry, new THREE.Matrix4(), entry.name || `MaxMesh_${i}`))
     }
 
     return root
@@ -420,12 +419,16 @@ export class MaxLoader {
     // MNVert：uint32 标记；未标记 MN_DEAD(0x2) 时跟随 3 个 float32 坐标
     const MN_DEAD = 0x2
     const positions = new Float32Array(vCount * 3)
+    const deadVertices = new Set<number>()
     let cursor = vStart + 4
     for (let i = 0; i < vCount; i++) {
       if (cursor + 4 > verts.end) return null
       const flags = view.getUint32(cursor, true)
       cursor += 4
-      if ((flags & MN_DEAD) !== 0) continue
+      if ((flags & MN_DEAD) !== 0) {
+        deadVertices.add(i)
+        continue
+      }
       if (cursor + 12 > verts.end) return null
       positions[i * 3] = view.getFloat32(cursor, true)
       positions[i * 3 + 1] = view.getFloat32(cursor + 4, true)
@@ -469,34 +472,35 @@ export class MaxLoader {
       const io = view.getUint16(faceCursor, true)
       faceCursor += 2
 
-      if (io & FACE_FLAGS) faceCursor += 4
+      let flags = 0
+      if (io & FACE_FLAGS) {
+        if (faceCursor + 4 > faces.end) break
+        flags = view.getUint32(faceCursor, true)
+        faceCursor += 4
+      }
       if (io & MAT_ID) faceCursor += 2
       if (io & SMOOTH_GROUP) faceCursor += 4
 
-      let diagonals: number[] | null = null
       if (io & DIAG && degree > 3) {
         const count = (degree - 3) * 2
         if (faceCursor + count * 4 > faces.end) break
-        diagonals = new Array(count)
-        for (let k = 0; k < count; k++) diagonals[k] = view.getInt32(faceCursor + k * 4, true)
         faceCursor += count * 4
       }
+      if (faceCursor > faces.end || (flags & MN_DEAD) !== 0) continue
 
       let valid = true
       for (let k = 0; k < degree; k++) {
-        if (faceVertices[k] >= vCount) {
+        if (faceVertices[k] >= vCount || deadVertices.has(faceVertices[k]) ||
+          !Number.isFinite(positions[faceVertices[k] * 3]) ||
+          !Number.isFinite(positions[faceVertices[k] * 3 + 1]) ||
+          !Number.isFinite(positions[faceVertices[k] * 3 + 2])) {
           valid = false
           break
         }
       }
       if (!valid) continue
 
-      // MNFace::diag 的对角线编号在不同 3ds Max 版本中语义不一致，
-      // 直接使用会撕裂网格；这里统一用顶点 0 的扇形三角化，保证拓扑连续。
-      for (let k = 1; k + 1 < degree; k++) {
-        indices.push(faceVertices[0], faceVertices[k], faceVertices[k + 1])
-      }
-      void diagonals
+      this.triangulatePolygon(positions, faceVertices, indices)
     }
 
     if (indices.length < 3) return null
@@ -507,118 +511,59 @@ export class MaxLoader {
     // 3ds Max 为右手 Z 轴向上，坐标轴转换 (x, z, -y) 是纯旋转（行列式 +1），
     // 因此面索引顺序保持不变即可得到外向法线（已用真实文件的有符号体积验证）。
     const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-    geometry.setIndex(indices)
+    // 仅保留实际被面使用的顶点；MN_DEAD / 孤立顶点不能把包围盒拉到原点。
+    // 每个实例独立复制，烘焙一个节点不会改变另一个实例的源数据。
+    const remap = new Map<number, number>()
+    const packed: number[] = []
+    const packedIndices = indices.map((index) => {
+      let mapped = remap.get(index)
+      if (mapped === undefined) {
+        mapped = remap.size
+        remap.set(index, mapped)
+        packed.push(positions[index * 3], positions[index * 3 + 1], positions[index * 3 + 2])
+      }
+      return mapped
+    })
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(packed, 3))
+    geometry.setIndex(packedIndices)
     return geometry
   }
 
-  /** 网格是否位于对象局部坐标系（中心接近原点，典型的未塌陷基本体） */
-  /** 网格包围盒中心 */
-  private meshCenter(positions: Float32Array): THREE.Vector3 {
-    const box = this.meshBounds(positions)
-    return box ? box.getCenter(new THREE.Vector3()) : new THREE.Vector3()
-  }
-
-  /** 一组点的逐轴中位数，用于估计场景主体中心 */
-  private medianCenter(points: THREE.Vector3[]): THREE.Vector3 {
-    if (points.length === 0) return new THREE.Vector3()
-    const xs = points.map((p) => p.x).sort((a, b) => a - b)
-    const ys = points.map((p) => p.y).sort((a, b) => a - b)
-    const zs = points.map((p) => p.z).sort((a, b) => a - b)
-    const mid = Math.floor(points.length / 2)
-    return new THREE.Vector3(xs[mid], ys[mid], zs[mid])
-  }
-
-  /**
-   * 判断整份文件是否应当叠加节点变换。
-   *
-   * 3ds Max 语义上网格位于对象空间、节点变换负责摆放；但大量第三方资产在导出时
-   * 已把世界坐标烘进顶点，若再叠加平移就会让零件飞出场景。这里分别计算两种布局下
-   * 网格中心到最近邻网格中心的中位距离：真实装配关系应“彼此靠近但不完全重合”。
-   *   - 原始坐标已经彼此贴合 → 顶点是烘焙坐标，不叠加节点变换
-   *   - 原始坐标挤在一起或散得很开，叠加后才贴合 → 叠加节点变换
-   */
-  private sceneUsesNodeTransform(
-    meshes: MaxMeshEntry[],
-    matrices: Map<number, THREE.Matrix4>,
-    axisMatrix: THREE.Matrix4
-  ): boolean {
-    if (meshes.length < 2) return true
-
-    const identity = new THREE.Matrix4()
-    const rawCenters: THREE.Vector3[] = []
-    const nodeCenters: THREE.Vector3[] = []
-    const point = new THREE.Vector3()
-
-    for (const entry of meshes) {
-      const box = this.meshBounds(entry.positions)
-      if (!box) continue
-      const center = box.getCenter(new THREE.Vector3())
-
-      rawCenters.push(center.clone().applyMatrix4(axisMatrix))
-      const matrix = matrices.get(entry.ownerItem) ?? identity
-      const combined = axisMatrix.clone().multiply(matrix)
-      nodeCenters.push(point.copy(center).applyMatrix4(combined).clone())
+  private reverseWinding(geometry: THREE.BufferGeometry): void {
+    const index = geometry.getIndex()!
+    for (let i = 0; i < index.count; i += 3) {
+      const b = index.getX(i + 1)
+      index.setX(i + 1, index.getX(i + 2))
+      index.setX(i + 2, b)
     }
-
-    if (rawCenters.length < 2) return true
-
-    const span = new THREE.Box3().setFromPoints(rawCenters)
-    const diagonal = span.getSize(new THREE.Vector3()).length()
-    if (!Number.isFinite(diagonal) || diagonal <= 1e-6) return true
-
-    const rawScore = this.medianNearestDistance(rawCenters)
-    const nodeScore = this.medianNearestDistance(nodeCenters)
-    const pileThreshold = diagonal * 0.02
-
-    // 原始坐标挤成一团（堆在轴心），说明是对象局部坐标
-    if (rawScore < pileThreshold && nodeScore >= rawScore) return true
-
-    return nodeScore < rawScore
   }
 
-  private meshBounds(positions: Float32Array): THREE.Box3 | null {
-    if (positions.length < 3) return null
-    const box = new THREE.Box3()
-    for (let i = 0; i < positions.length; i += 3) {
-      const x = positions[i]
-      const y = positions[i + 1]
-      const z = positions[i + 2]
-      if (x < box.min.x) box.min.x = x
-      if (x > box.max.x) box.max.x = x
-      if (y < box.min.y) box.min.y = y
-      if (y > box.max.y) box.max.y = y
-      if (z < box.min.z) box.min.z = z
-      if (z > box.max.z) box.max.z = z
+  /** Newell 法线确定投影平面，再耳切三角化，避免凹面扇形拆分时跨越轮廓。 */
+  private triangulatePolygon(positions: Float32Array, vertices: number[], indices: number[]): void {
+    if (vertices.length === 3) {
+      indices.push(...vertices)
+      return
     }
-    return box
-  }
-
-  /** 每个点到其它点的最近距离的中位数；样本较大时抽样以控制耗时 */
-  private medianNearestDistance(points: THREE.Vector3[]): number {
-    const count = points.length
-    if (count < 2) return 0
-
-    const step = Math.max(1, Math.floor(count / 200))
-    const sample: number[] = []
-    for (let i = 0; i < count; i += step) {
-      let best = Infinity
-      for (let j = 0; j < count; j++) {
-        if (i === j) continue
-        const distance = points[i].distanceToSquared(points[j])
-        if (distance < best) best = distance
-      }
-      if (Number.isFinite(best)) sample.push(Math.sqrt(best))
+    const points = vertices.map((v) => new THREE.Vector3().fromArray(positions, v * 3))
+    const normal = new THREE.Vector3()
+    for (let i = 0; i < points.length; i++) {
+      const a = points[i], b = points[(i + 1) % points.length]
+      normal.x += (a.y - b.y) * (a.z + b.z)
+      normal.y += (a.z - b.z) * (a.x + b.x)
+      normal.z += (a.x - b.x) * (a.y + b.y)
     }
-
-    if (sample.length === 0) return 0
-    sample.sort((a, b) => a - b)
-    return sample[Math.floor(sample.length / 2)]
-  }
-
-  private hasTranslation(matrix: THREE.Matrix4): boolean {
-    const e = matrix.elements
-    return Math.hypot(e[12], e[13], e[14]) > 1e-3
+    if (normal.lengthSq() === 0) return
+    const axis = Math.abs(normal.x) > Math.abs(normal.y)
+      ? (Math.abs(normal.x) > Math.abs(normal.z) ? 0 : 2)
+      : (Math.abs(normal.y) > Math.abs(normal.z) ? 1 : 2)
+    const outline = points.map((p) => axis === 0 ? new THREE.Vector2(p.y, p.z)
+      : axis === 1 ? new THREE.Vector2(p.z, p.x) : new THREE.Vector2(p.x, p.y))
+    const ab = new THREE.Vector3(), ac = new THREE.Vector3()
+    for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(outline, [])) {
+      const direction = ab.subVectors(points[b], points[a]).cross(ac.subVectors(points[c], points[a])).dot(normal)
+      if (direction === 0) continue
+      indices.push(vertices[a], vertices[direction > 0 ? b : c], vertices[direction > 0 ? c : b])
+    }
   }
 
   // ---------------------------------------------------------------
@@ -630,9 +575,6 @@ export class MaxLoader {
     items: MaxChunkRef[],
     meshOwners: Set<number>
   ): {
-    matrices: Map<number, THREE.Matrix4>
-    localMatrices: Map<number, THREE.Matrix4>
-    names: Map<number, string>
     nodes: { index: number; name: string; targets: Set<number>; matrix: THREE.Matrix4 }[]
   } {
     interface NodeInfo {
@@ -676,12 +618,6 @@ export class MaxLoader {
       nodes.set(i, { name: this.readNodeName(view, nameChunk), parent, objectRef, tmRef })
     }
 
-    const hasMeshChunk = (index: number): boolean => {
-      const item = items[index]
-      if (!item || !item.container) return false
-      return this.findFirstChunk(view, item, 0x08fe) !== null
-    }
-
     // 引用可能指向派生对象（修改器堆栈结果）甚至多层包装，沿引用链向下展开，
     // 一旦到达网格块就停止，避免把无关对象误绑到同一节点。
     const targetsOf = (info: NodeInfo): Set<number> => {
@@ -696,7 +632,7 @@ export class MaxLoader {
         targets.add(index)
 
         const item = items[index]
-        if (!item.container || hasMeshChunk(index)) continue
+        if (!item.container || meshOwners.has(index)) continue
 
         for (const child of this.readChildren(view, item)) {
           if (child.container) continue
@@ -716,7 +652,6 @@ export class MaxLoader {
 
     // 只有真正绑定到网格的节点及其祖先才需要解析变换，超大场景可省去大量无用解析
     const relevant: { index: number; info: NodeInfo; targets: Set<number> }[] = []
-    const needed = new Set<number>()
     for (const [index, info] of nodes) {
       const targets = targetsOf(info)
       let bindsMesh = false
@@ -730,14 +665,6 @@ export class MaxLoader {
       if (!bindsMesh && !this.targetsHaveSpline(view, items, targets)) continue
 
       relevant.push({ index, info, targets })
-      let cursor = index
-      let guard = 0
-      while (cursor >= 0 && nodes.has(cursor) && guard++ < 10000) {
-        needed.add(cursor)
-        const parent = nodes.get(cursor)!.parent
-        if (parent === cursor) break
-        cursor = parent
-      }
     }
 
     const world = new Map<number, THREE.Matrix4>()
@@ -761,24 +688,15 @@ export class MaxLoader {
       return result
     }
 
-    const out = new Map<number, THREE.Matrix4>()
-    const localOut = new Map<number, THREE.Matrix4>()
-    const names = new Map<number, string>()
     const nodeList: { index: number; name: string; targets: Set<number>; matrix: THREE.Matrix4 }[] = []
 
     for (const { index, info, targets } of relevant) {
-      const matrix = resolve(index, new Set())
-      const localMatrix = localOf(index).clone()
+      const matrix = resolve(index, new Set()).clone().multiply(this.readObjectOffset(view, items[index]))
       const safeName = info.name.replace(/[^\p{L}\p{N}_\-. ]/gu, '')
       nodeList.push({ index, name: safeName, targets, matrix })
-      for (const target of targets) {
-        if (!out.has(target)) out.set(target, matrix)
-        if (!localOut.has(target)) localOut.set(target, localMatrix)
-        if (!names.has(target)) names.set(target, safeName)
-      }
     }
 
-    return { matrices: out, localMatrices: localOut, names, nodes: nodeList }
+    return { nodes: nodeList }
   }
 
   /** 节点的引用链中是否带有样条控制点数据（0x290a） */
@@ -813,21 +731,57 @@ export class MaxLoader {
     if (refs.length < 3) return identity
 
     const position = this.readControllerVector(view, items, refs[0]) || [0, 0, 0]
-    const rotation = this.readControllerVector(view, items, refs[1]) || [0, 0, 0]
-    const scale = this.readControllerVector(view, items, refs[2]) || [1, 1, 1]
-
     const translation = new THREE.Matrix4().makeTranslation(position[0], position[1], position[2])
     // 3ds Max 以行向量约定按 X→Y→Z 依次旋转（R = Rz·Ry·Rx），
     // 等价于 three.js 的 'ZYX' 顺序（已用 3ds Max 导出的 FBX 逐物体核对）
-    const euler = new THREE.Euler(rotation[0], rotation[1], rotation[2], 'ZYX')
-    const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(euler)
-    const scaleMatrix = new THREE.Matrix4().makeScale(
-      scale[0] === 0 ? 1 : scale[0],
-      scale[1] === 0 ? 1 : scale[1],
-      scale[2] === 0 ? 1 : scale[2]
-    )
+    const rotationItem = items[refs[1]]
+    const quaternion = rotationItem && this.findFirstChunk(view, rotationItem, 0x2505)
+    const rotation = this.readControllerVector(view, items, refs[1]) || [0, 0, 0]
+    const rotationMatrix = quaternion && this.payloadLength(quaternion) === 16
+      ? new THREE.Matrix4().makeRotationFromQuaternion(this.readQuaternion(view, quaternion))
+      : new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(...rotation, 'ZYX'))
+    const scaleItem = items[refs[2]]
+    const scaleValue = scaleItem && this.findFirstChunk(view, scaleItem, 0x2505)
+    const scale = this.readControllerVector(view, items, refs[2]) || [1, 1, 1]
+    const scaleMatrix = scaleValue && this.payloadLength(scaleValue) === 28
+      ? this.readScaleValue(view, scaleValue)
+      : new THREE.Matrix4().makeScale(...scale)
 
     return translation.multiply(rotationMatrix).multiply(scaleMatrix)
+  }
+
+  /** INode 的对象偏移独立于 PRS，不能参与父子节点继承。 */
+  private readObjectOffset(view: DataView, item: MaxChunkRef): THREE.Matrix4 {
+    const children = this.readChildren(view, item)
+    const position = children.find((c) => c.id === 0x096a && !c.container)
+    const rotation = children.find((c) => c.id === 0x096b && !c.container)
+    const scale = children.find((c) => c.id === 0x096c && !c.container)
+    const matrix = new THREE.Matrix4()
+    if (position && this.payloadLength(position) === 12) {
+      const start = this.payloadStart(position)
+      matrix.makeTranslation(view.getFloat32(start, true), view.getFloat32(start + 4, true), view.getFloat32(start + 8, true))
+    }
+    if (rotation && this.payloadLength(rotation) === 16) {
+      matrix.multiply(new THREE.Matrix4().makeRotationFromQuaternion(this.readQuaternion(view, rotation)))
+    }
+    if (scale && this.payloadLength(scale) === 28) matrix.multiply(this.readScaleValue(view, scale))
+    return matrix
+  }
+
+  private readQuaternion(view: DataView, chunk: MaxChunkRef, offset = 0): THREE.Quaternion {
+    const start = this.payloadStart(chunk) + offset
+    const q = new THREE.Quaternion(view.getFloat32(start, true), view.getFloat32(start + 4, true),
+      view.getFloat32(start + 8, true), view.getFloat32(start + 12, true))
+    return q.normalize().conjugate() // Max 的行向量四元数转为 three.js 列向量约定
+  }
+
+  /** ScaleValue = 三轴缩放 + 缩放轴方向四元数，不能丢弃后 16 字节。 */
+  private readScaleValue(view: DataView, chunk: MaxChunkRef): THREE.Matrix4 {
+    const start = this.payloadStart(chunk)
+    const scale = new THREE.Matrix4().makeScale(view.getFloat32(start, true),
+      view.getFloat32(start + 4, true), view.getFloat32(start + 8, true))
+    const axis = new THREE.Matrix4().makeRotationFromQuaternion(this.readQuaternion(view, chunk, 12))
+    return axis.clone().multiply(scale).multiply(axis.clone().transpose())
   }
 
   /** 读取一个三通道控制器（位置/旋转/缩放）的静态值 */

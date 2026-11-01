@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { unzlibSync } from 'three/examples/jsm/libs/fflate.module.js'
+import { triangulatePolygon } from './utils/triangulation'
 
 /**
  * 纯 TypeScript 实现的旧版 FBX（二进制 6.x，FileVersion < 7000）网格解析器。
@@ -240,6 +241,8 @@ export class Fbx6Loader {
   }
 
   /** 把数组属性（或 6.x 的逐分量属性）读成 Float32Array / Int32Array */
+  private readNumericArray(node: Fbx6Node, kind: 'float'): Float32Array | null
+  private readNumericArray(node: Fbx6Node, kind: 'int'): Int32Array | null
   private readNumericArray(node: Fbx6Node, kind: 'float' | 'int'): Float32Array | Int32Array | null {
     const values: number[] = []
     let offset = node.propStart
@@ -425,14 +428,13 @@ export class Fbx6Loader {
         polygonUv = []
         return
       }
-      for (let i = 1; i + 1 < polygon.length; i++) {
-        indices.push(polygon[0], polygon[i], polygon[i + 1])
+      const triangles: number[] = []
+      triangulatePolygon(polygon, positions, triangles)
+      indices.push(...triangles)
+      for (const index of triangles) {
         if (useUv) {
-          uvArray.push(
-            polygonUv[0 * 2], polygonUv[0 * 2 + 1],
-            polygonUv[i * 2], polygonUv[i * 2 + 1],
-            polygonUv[(i + 1) * 2], polygonUv[(i + 1) * 2 + 1]
-          )
+          const corner = polygon.indexOf(index)
+          uvArray.push(polygonUv[corner * 2], polygonUv[corner * 2 + 1])
         }
       }
       polygon = []

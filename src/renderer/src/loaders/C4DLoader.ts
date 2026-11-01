@@ -50,7 +50,8 @@ export class C4DLoader {
 
         if (object.worldMatrix) {
           // 直接烘焙进几何，导出 OBJ/GLB 等格式时坐标才正确
-          mesh.geometry.applyMatrix4(object.worldMatrix)
+          // Reflect the geometry once, instead of reflecting every node in the ancestor chain.
+          mesh.geometry.applyMatrix4(object.worldMatrix.clone().multiply(new THREE.Matrix4().makeScale(1, 1, -1)))
           mesh.geometry.computeVertexNormals()
           mesh.geometry.computeBoundingBox()
         }
@@ -242,25 +243,17 @@ export class C4DLoader {
     const [pos, scale, rot] = transformChunk.vecs
     return {
       position: new THREE.Vector3(pos[0], pos[1], pos[2]),
-      scale: new THREE.Vector3(
-        scale[0] === 0 ? 1 : scale[0],
-        scale[1] === 0 ? 1 : scale[1],
-        scale[2] === 0 ? 1 : scale[2]
-      ),
+      scale: new THREE.Vector3(scale[0], scale[1], scale[2]),
       rotation: new THREE.Vector3(rot[0], rot[1], rot[2])
     }
   }
 
   /**
-   * C4D 为左手坐标系，Three.js 为右手坐标系。设 C = diag(1, 1, -1) 为坐标轴翻转，
-   * 则 world_rh = C · T · Ry(H) · Rx(P) · Rz(B) · S · p_lh 可化为
-   *   M = Translate(C·T) · Rz(-B) · Rx(P) · Ry(H) · Scale · C
-   * 该式已用真实文件（多边形对象 Pitch = -π/2）验证。
+   * 节点变换转换到查看器坐标系，供父子节点相乘。
+   * 顶点的 Z 反射在最终烘焙时单独应用，不能随每一层父节点重复应用。
    */
   private toMatrix4(transform: C4DTransform): THREE.Matrix4 {
     const { position, scale, rotation } = transform
-    const flip = new THREE.Matrix4().makeScale(1, 1, -1)
-
     const translation = new THREE.Matrix4().makeTranslation(position.x, position.y, -position.z)
     const rotH = new THREE.Matrix4().makeRotationY(rotation.x)
     const rotP = new THREE.Matrix4().makeRotationX(rotation.y)
@@ -272,7 +265,6 @@ export class C4DLoader {
     matrix.multiply(rotP)
     matrix.multiply(rotH)
     matrix.multiply(scaling)
-    matrix.multiply(flip)
     return matrix
   }
 

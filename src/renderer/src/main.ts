@@ -1,7 +1,7 @@
 import './style.css'
 import { Viewer, type ViewMode } from './viewer'
 import { UI } from './ui'
-import { loadModelFile, exportModel, serializeModel, UNIT_TO_MM } from './formats'
+import { loadModelFile, exportModel, serializeModel, getExportFormats, UNIT_TO_MM } from './formats'
 
 const viewport = document.getElementById('viewport')!
 const viewer = new Viewer(viewport)
@@ -41,6 +41,7 @@ ui.bindExport(async () => {
     }
   } catch (err) {
     console.error('导出失败:', err)
+    alert(`导出失败：${err instanceof Error ? err.message : String(err)}`)
   }
 })
 
@@ -48,32 +49,40 @@ ui.bindExport(async () => {
 function promptExportFormat(): Promise<string | null> {
   return new Promise((resolve) => {
     const modal = document.createElement('div')
+    modal.setAttribute('role', 'dialog')
+    modal.setAttribute('aria-modal', 'true')
+    modal.setAttribute('aria-label', '导出格式')
+    const finish = (format: string | null): void => {
+      window.removeEventListener('keydown', onKeyDown)
+      modal.remove()
+      resolve(format)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') { event.preventDefault(); finish(null) }
+    }
+    window.addEventListener('keydown', onKeyDown)
     modal.style.cssText = `
       position: fixed; inset: 0; background: rgba(0,0,0,0.3);
       display: flex; align-items: center; justify-content: center; z-index: 200;
     `
     const box = document.createElement('div')
     box.style.cssText = `
-      background: #fff; border-radius: 12px; padding: 24px; width: 260px;
+      background: #fff; border-radius: 12px; padding: 24px; width: 340px; max-height: 85vh; overflow-y: auto;
       box-shadow: 0 8px 30px rgba(0,0,0,0.2);
     `
     const title = document.createElement('div')
     title.textContent = '导出当前姿态（静态模型）'
     title.style.cssText = 'font-size:15px;font-weight:600;margin-bottom:16px;'
     box.appendChild(title)
-
-    const items = [
-      { label: 'Wavefront OBJ (.obj)', value: 'obj' },
-      { label: 'glTF 2.0 二进制 (.glb)', value: 'glb' },
-      { label: 'glTF 2.0 文本 (.gltf)', value: 'gltf' },
-      { label: 'Autodesk FBX (.fbx)', value: 'fbx' },
-      { label: 'STL 二进制 (.stl)', value: 'stl' },
-      { label: 'PLY 几何网格 (.ply)', value: 'ply' },
-      { label: 'MMD 模型文件 (.pmx)', value: 'pmx' }
-    ]
+    const note = document.createElement('div')
+    note.textContent = 'VRM 添加基础人形骨架，保持当前外形，不自动蒙皮。'
+    note.style.cssText = 'font-size:12px;color:#6b7280;line-height:1.6;margin-bottom:12px;'
+    box.appendChild(note)
+    const items = getExportFormats().map((info) => ({ label: info.name.includes(`.${info.ext}`) ? info.name : `${info.name} (.${info.ext})`, value: info.ext }))
     items.forEach((item) => {
       const btn = document.createElement('button')
       btn.textContent = item.label
+      btn.dataset.exportFormat = item.value
       btn.style.cssText = `
         display:block; width:100%; margin-bottom:8px; padding:10px; border-radius:8px;
         border:1px solid #e5e7eb; background:#fff; font-size:14px; cursor:pointer; text-align:left;
@@ -87,8 +96,7 @@ function promptExportFormat(): Promise<string | null> {
         btn.style.color = 'inherit'
       })
       btn.addEventListener('click', () => {
-        modal.remove()
-        resolve(item.value)
+        finish(item.value)
       })
       box.appendChild(btn)
     })
@@ -100,19 +108,18 @@ function promptExportFormat(): Promise<string | null> {
       border:none; background:#f3f4f6; font-size:14px; cursor:pointer;
     `
     cancel.addEventListener('click', () => {
-      modal.remove()
-      resolve(null)
+      finish(null)
     })
     box.appendChild(cancel)
 
     modal.appendChild(box)
     modal.addEventListener('click', (e) => {
       if (e.target === modal) {
-        modal.remove()
-        resolve(null)
+        finish(null)
       }
     })
     document.body.appendChild(modal)
+    box.querySelector('button')?.focus()
   })
 }
 
