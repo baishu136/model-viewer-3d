@@ -67,14 +67,16 @@ export class MaxLoader {
     // 3. 组装场景
     const axisMatrix = new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1)
 
+    // 判断本文件是否需要叠加节点平移（有一部分资产已把世界坐标烘进顶点）
+    const sceneUsesNodeTransform = this.sceneUsesNodeTransform(meshes, nodeInfo.matrices, axisMatrix)
+
     for (let i = 0; i < meshes.length; i++) {
       const entry = meshes[i]
       const nodeMatrix = nodeInfo.matrices.get(entry.ownerItem) || new THREE.Matrix4()
 
-      // 节点只有旋转/缩放时，网格处于节点局部坐标系（例如 FBX 导入的角色为 Y 轴向上，
-      // 由根节点绕 X 轴旋转 90° 恢复）；节点带平移且网格已位于世界坐标（已塌陷）时则不再叠加，
-      // 否则会出现“零件炸开”的二次位移。
-      const useNodeTransform = !this.hasTranslation(nodeMatrix) || this.looksLocal(entry.positions)
+      // 只有旋转/缩放的节点必定要叠加（如 FBX 导入角色的 90° 立正）；带平移的节点
+      // 则由 sceneUsesNodeTransform 判定是否已经烘焙进顶点。
+      const useNodeTransform = !this.hasTranslation(nodeMatrix) || sceneUsesNodeTransform
       const transform = useNodeTransform ? axisMatrix.clone().multiply(nodeMatrix) : axisMatrix
 
       const geometry = this.buildGeometry(entry.positions, entry.indices)
@@ -393,36 +395,91 @@ export class MaxLoader {
   }
 
   /** 网格是否位于对象局部坐标系（中心接近原点，典型的未塌陷基本体） */
-  /** 网格是否位于对象局部坐标系（包围盒中心接近原点） */
-  private looksLocal(positions: Float32Array): boolean {
-    const count = positions.length / 3
-    if (count === 0) return false
+  /**
+   * 判断整份文件是否应当叠加节点变换。
+   *
+   * 3ds Max 语义上网格位于对象空间、节点变换负责摆放；但大量第三方资产在导出时
+   * 已把世界坐标烘进顶点，若再叠加平移就会让零件飞出场景。这里分别计算两种布局下
+   * 网格中心到最近邻网格中心的中位距离：真实装配关系应“彼此靠近但不完全重合”。
+   *   - 原始坐标已经彼此贴合 → 顶点是烘焙坐标，不叠加节点变换
+   *   - 原始坐标挤在一起或散得很开，叠加后才贴合 → 叠加节点变换
+   */
+  private sceneUsesNodeTransform(
+    meshes: MaxMeshEntry[],
+    matrices: Map<number, THREE.Matrix4>,
+    axisMatrix: THREE.Matrix4
+  ): boolean {
+    if (meshes.length < 2) return true
 
-    let minX = Infinity
-    let minY = Infinity
-    let minZ = Infinity
-    let maxX = -Infinity
-    let maxY = -Infinity
-    let maxZ = -Infinity
-    for (let i = 0; i < count; i++) {
-      const x = positions[i * 3]
-      const y = positions[i * 3 + 1]
-      const z = positions[i * 3 + 2]
-      if (x < minX) minX = x
-      if (x > maxX) maxX = x
-      if (y < minY) minY = y
-      if (y > maxY) maxY = y
-      if (z < minZ) minZ = z
-      if (z > maxZ) maxZ = z
+    const identity = new THREE.Matrix4()
+    const rawCenters: THREE.Vector3[] = []
+    const nodeCenters: THREE.Vector3[] = []
+    const point = new THREE.Vector3()
+
+    for (const entry of meshes) {
+      const box = this.meshBounds(entry.positions)
+      if (!box) continue
+      const center = box.getCenter(new THREE.Vector3())
+
+      rawCenters.push(center.clone().applyMatrix4(axisMatrix))
+      const matrix = matrices.get(entry.ownerItem) ?? identity
+      const combined = axisMatrix.clone().multiply(matrix)
+      nodeCenters.push(point.copy(center).applyMatrix4(combined).clone())
     }
 
-    const cx = (minX + maxX) / 2
-    const cy = (minY + maxY) / 2
-    const cz = (minZ + maxZ) / 2
-    const diagonal = Math.max(maxX - minX, maxY - minY, maxZ - minZ)
-    if (!Number.isFinite(diagonal) || diagonal <= 1e-6) return false
+    if (rawCenters.length < 2) return true
 
-    return Math.hypot(cx, cy, cz) <= Math.max(diagonal * 0.15, 1e-4)
+    const span = new THREE.Box3().setFromPoints(rawCenters)
+    const diagonal = span.getSize(new THREE.Vector3()).length()
+    if (!Number.isFinite(diagonal) || diagonal <= 1e-6) return true
+
+    const rawScore = this.medianNearestDistance(rawCenters)
+    const nodeScore = this.medianNearestDistance(nodeCenters)
+    const pileThreshold = diagonal * 0.02
+
+    // 原始坐标挤成一团（堆在轴心），说明是对象局部坐标
+    if (rawScore < pileThreshold && nodeScore >= rawScore) return true
+
+    return nodeScore < rawScore
+  }
+
+  private meshBounds(positions: Float32Array): THREE.Box3 | null {
+    if (positions.length < 3) return null
+    const box = new THREE.Box3()
+    for (let i = 0; i < positions.length; i += 3) {
+      const x = positions[i]
+      const y = positions[i + 1]
+      const z = positions[i + 2]
+      if (x < box.min.x) box.min.x = x
+      if (x > box.max.x) box.max.x = x
+      if (y < box.min.y) box.min.y = y
+      if (y > box.max.y) box.max.y = y
+      if (z < box.min.z) box.min.z = z
+      if (z > box.max.z) box.max.z = z
+    }
+    return box
+  }
+
+  /** 每个点到其它点的最近距离的中位数；样本较大时抽样以控制耗时 */
+  private medianNearestDistance(points: THREE.Vector3[]): number {
+    const count = points.length
+    if (count < 2) return 0
+
+    const step = Math.max(1, Math.floor(count / 200))
+    const sample: number[] = []
+    for (let i = 0; i < count; i += step) {
+      let best = Infinity
+      for (let j = 0; j < count; j++) {
+        if (i === j) continue
+        const distance = points[i].distanceToSquared(points[j])
+        if (distance < best) best = distance
+      }
+      if (Number.isFinite(best)) sample.push(Math.sqrt(best))
+    }
+
+    if (sample.length === 0) return 0
+    sample.sort((a, b) => a - b)
+    return sample[Math.floor(sample.length / 2)]
   }
 
   private hasTranslation(matrix: THREE.Matrix4): boolean {
