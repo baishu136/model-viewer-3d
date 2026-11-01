@@ -148,7 +148,12 @@ export interface LoadResult {
 }
 
 function makeMaterial(): THREE.Material {
-  return new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.70, metalness: 0.08 })
+  return new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.90,
+    metalness: 0.02,
+    side: THREE.DoubleSide
+  })
 }
 
 function applyWhiteMaterial(object: THREE.Object3D): void {

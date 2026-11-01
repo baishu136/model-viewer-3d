@@ -99,12 +99,17 @@ export class Viewer {
     this.controls.dampingFactor = 0.08
     this.controls.target.set(0, 0, 0)
 
-    // 演播室级 3 点光照系统：塑造自然明暗转折与微高光，彻底解决白模发白与死黑问题
-    this.hemiLight = new THREE.HemisphereLight(0xffffff, 0xd4d8e0, 0.65)
-    this.keyLight = new THREE.DirectionalLight(0xffffff, 0.85)
+    // 演播室级 3 点光照系统 + 视点跟随补光：塑造自然明暗转折与微高光，彻底解决白模死黑与二次元脸部黑斑
+    this.hemiLight = new THREE.HemisphereLight(0xffffff, 0xe2e8f0, 0.75)
+    this.keyLight = new THREE.DirectionalLight(0xffffff, 0.60)
     this.keyLight.position.set(1.5, 2.2, 1.8)
-    this.fillLight = new THREE.DirectionalLight(0xedf2f7, 0.40)
+    this.fillLight = new THREE.DirectionalLight(0xf1f5f9, 0.45)
     this.fillLight.position.set(-1.8, 0.8, -1.2)
+
+    // 相机跟随灯：直射视点中心，软化风格化/二次元角色眼窝与下巴阴影
+    const headLight = new THREE.DirectionalLight(0xffffff, 0.35)
+    this.camera.add(headLight)
+    this.scene.add(this.camera)
     this.scene.add(this.hemiLight, this.keyLight, this.fillLight)
 
     // 网格与坐标轴
@@ -151,7 +156,6 @@ export class Viewer {
     this.modelRoot.traverse((obj) => {
       if ((obj as THREE.SkinnedMesh).isSkinnedMesh) {
         const skinned = obj as THREE.SkinnedMesh
-        skinned.skeleton?.pose()
         skinned.skeleton?.update()
       }
     })
@@ -300,13 +304,10 @@ export class Viewer {
         mesh.morphTargetDictionary = undefined
       }
 
-      // Fix: Ensure SkinnedMesh skeleton is cleanly posed and updated
+      // Ensure SkinnedMesh skeleton matrices are updated
       if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
         const skinned = mesh as THREE.SkinnedMesh
-        if (skinned.skeleton) {
-          skinned.skeleton.pose()
-          skinned.skeleton.update()
-        }
+        skinned.skeleton?.update()
       }
 
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
@@ -418,11 +419,13 @@ export class Viewer {
 
     let distance: number
     if (isStandee) {
-      // 2D 展板：正对摄像机无畸变平铺居中
-      const distV = (size.y / 2) / Math.tan(fovV / 2)
-      const distH = (size.x / 2) / Math.tan(fovH / 2)
+      // 3D 视口立体展台：赋予优雅微透视立体角（X: 0.25, Y: 0.18, Z: 1.0），直观展现 3D 厚度与空间立体层次
+      const radius = Math.max(size.length() / 2, 0.01)
+      const distV = radius / Math.tan(fovV / 2)
+      const distH = radius / Math.tan(fovH / 2)
       distance = Math.max(distV, distH, 1) * 1.15
-      this.camera.position.set(0, 0, distance)
+      const dir = new THREE.Vector3(0.25, 0.18, 1.0).normalize()
+      this.camera.position.copy(dir.multiplyScalar(distance))
     } else {
       // 3D 立体模型：黄金等轴测斜视角
       const radius = Math.max(size.length() / 2, 0.01)
@@ -476,12 +479,13 @@ export class Viewer {
     if (!this.modelRoot) return
     this.removeWireLayer()
 
-    // 白模实体材质：首次创建后缓存复用
+    // 白模实体材质：首次创建后缓存复用，采用双面渲染与柔和微漫反射，彻底消除风格化/二次元黑斑与裙摆破面
     if (!this.solidMaterial) {
       this.solidMaterial = new THREE.MeshStandardMaterial({
         color: 0xffffff,
-        roughness: 0.70,
-        metalness: 0.08
+        roughness: 0.90,
+        metalness: 0.02,
+        side: THREE.DoubleSide
       })
     }
     const isWireMode = this.mode === 'wire'
@@ -518,7 +522,7 @@ export class Viewer {
     const wireGroup = new THREE.Group()
     this.modelRoot.traverse((child) => {
       const mesh = child as THREE.Mesh
-      if (!mesh.isMesh || mesh.name === 'C4DPreviewBoard' || mesh.name === 'MaxPreviewBoard') return
+      if (!mesh.isMesh) return
       mesh.updateWorldMatrix(true, false)
       let wire: THREE.Mesh
       if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
