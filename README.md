@@ -102,6 +102,7 @@ release/                 # 本地打包产物（不提交到 Git）
 - **单位约定**：GLB/glTF 按标准使用米，载入后转换为内部毫米；FBX 按识别到的 UnitScaleFactor 转换。OBJ/STL/PLY/PMX/PMD 无可识别单位时默认按毫米解释。单位下拉框只切换显示单位。
 - **DCC 软件格式原生兼容**：内置轻量原生几何体解析器，直接读取 `.blend` (SDNA 数据块)、`.ma` (MEL 语句)、`.mb` (IFF 数据块)、`.c4d` (HyperFile 标记流中的 PolygonObject 顶点/多边形/UV) 以及 `.max` (Scene 流中的 TriObject 与可编辑多边形 MNMesh)，无需安装任何外部 3D 软件，毫秒级快速提取真实网格与拓扑布线。
 - **动画范围**：播放文件内已有的关键帧、骨骼蒙皮和形态动画；原软件的 IK、约束、修改器或物理模拟需要先烘焙。OBJ/STL/PLY/BLEND/C4D/MA/MB/MAX 为静态网格输入。
+- **FBX 版本**：同时支持现代化的二进制/ASCII FBX（FileVersion ≥ 7000）与 3ds Max、Maya 早期导出的旧版二进制 FBX 6.x（FileVersion < 7000，three.js 官方加载器不支持该版本）。
 - **C4D / MAX 读取范围**：`.c4d` 读取已保存的多边形对象（未塌陷的程序化基本体需在 C4D 中“转为可编辑对象”）；`.max` 读取 TriObject / Editable Poly 网格及节点位置/旋转/缩放，模型自身的修改器堆栈、材质与贴图不参与解析。压缩（gzip/zlib）保存的 Scene 流会自动解压。
 - **glTF 附属文件**：`.gltf` 引用的 `.bin` 几何/动画数据必须保留相对目录；材质和贴图不需要。GLB 通常将数据打包在单个文件内。
 

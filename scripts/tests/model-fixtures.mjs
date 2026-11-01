@@ -282,6 +282,92 @@ createNode mesh -n "pTriangleShape1" -p "pTriangle1";
   }
   buildC4DFixture()
 
+  // 3c. Legacy FBX 6.x fixture：three.js FBXLoader 不支持，需要 Fbx6Loader
+  const buildLegacyFbxFixture = () => {
+    // EndOffset 是文件内的绝对偏移，因此需要带着当前写入位置递归构造
+    const writeNode = (name, props, base, children = []) => {
+      const nameBuf = Buffer.from(name, 'latin1')
+      const propBuf = Buffer.concat(props)
+      const headerSize = 13 + nameBuf.length + propBuf.length
+      const built = []
+      let cursor = base + headerSize
+      for (const builder of children) {
+        const buffer = builder(cursor)
+        built.push(buffer)
+        cursor += buffer.length
+      }
+      const end = cursor + 13 // EndOffset 指向结束的空记录之后
+      const header = Buffer.alloc(13)
+      header.writeUInt32LE(end, 0)
+      header.writeUInt32LE(props.length, 4)
+      header.writeUInt32LE(propBuf.length, 8)
+      header.writeUInt8(nameBuf.length, 12)
+      return Buffer.concat([header, nameBuf, propBuf, ...built, Buffer.alloc(13)])
+    }
+    const double = (v) => {
+      const b = Buffer.alloc(9)
+      b.write('D', 0, 'latin1')
+      b.writeDoubleLE(v, 1)
+      return b
+    }
+    const int = (v) => {
+      const b = Buffer.alloc(5)
+      b.write('I', 0, 'latin1')
+      b.writeInt32LE(v, 1)
+      return b
+    }
+    const string = (v) => {
+      const data = Buffer.from(v, 'latin1')
+      const len = Buffer.alloc(4)
+      len.writeUInt32LE(data.length, 0)
+      return Buffer.concat([Buffer.from('S', 'latin1'), len, data])
+    }
+
+    const body = writeNode(
+      'Objects',
+      [],
+      27,
+      [
+        (modelBase) =>
+          writeNode(
+            'Model',
+            [string('Tri Model'), string('Mesh')],
+            modelBase,
+            [
+              (base) =>
+                writeNode('Properties60', [], base, [
+                  (propertyBase) =>
+                    writeNode(
+                      'Property',
+                      [string('Lcl Translation'), string('Vector3D'), string(''), double(0), double(0), double(0)],
+                      propertyBase
+                    )
+                ]),
+              (base) =>
+                writeNode(
+                  'Vertices',
+                  [double(0), double(0), double(0), double(10), double(0), double(0), double(0), double(10), double(0)],
+                  base
+                ),
+              (base) => writeNode('PolygonVertexIndex', [int(0), int(1), int(2)], base)
+            ]
+          ),
+        (connectBase) =>
+          writeNode(
+            'Connect',
+            [string('OO'), string('Tri Model'), string('Scene Model')],
+            connectBase
+          )
+      ]
+    )
+
+    const header = Buffer.from('Kaydara FBX Binary    ', 'latin1')
+    const version = Buffer.alloc(4)
+    version.writeUInt32LE(6100, 0)
+    fs.writeFileSync(path.join(dir, 'triangle-legacy.fbx'), Buffer.concat([header, version, body, Buffer.alloc(64)]))
+  }
+  buildLegacyFbxFixture()
+
   // 3b. Minimal 3ds Max fixture (.max)：真实 OLE 复合文档 + Scene 块结构
   const buildMaxFixture = () => {
     const CFB = createRequire(import.meta.url)('cfb')

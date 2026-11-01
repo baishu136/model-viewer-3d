@@ -537,15 +537,39 @@ export class MaxLoader {
       nodes.set(i, { name: this.readNodeName(view, nameChunk), parent, objectRef, tmRef })
     }
 
-    // 引用可能指向派生对象（修改器堆栈结果），需要再展开一层致密引用
+    const hasMeshChunk = (index: number): boolean => {
+      const item = items[index]
+      if (!item || !item.container) return false
+      return this.findFirstChunk(view, item, 0x08fe) !== null
+    }
+
+    // 引用可能指向派生对象（修改器堆栈结果）甚至多层包装，沿引用链向下展开，
+    // 一旦到达网格块就停止，避免把无关对象误绑到同一节点。
     const targetsOf = (info: NodeInfo): Set<number> => {
       const targets = new Set<number>()
       if (info.objectRef < 0 || info.objectRef >= items.length) return targets
-      targets.add(info.objectRef)
-      const targetItem = items[info.objectRef]
-      if (targetItem && targetItem.container) {
-        for (const ref of this.collectDenseRefs(view, targetItem)) {
-          if (ref >= 0 && ref < items.length) targets.add(ref)
+
+      const queue = [info.objectRef]
+      let guard = 0
+      while (queue.length > 0 && guard++ < 256) {
+        const index = queue.shift()!
+        if (index < 0 || index >= items.length || targets.has(index)) continue
+        targets.add(index)
+
+        const item = items[index]
+        if (!item.container || hasMeshChunk(index)) continue
+
+        for (const child of this.readChildren(view, item)) {
+          if (child.container) continue
+          if (child.id === 0x2034) {
+            const start = this.payloadStart(child)
+            for (let p = start; p + 4 <= child.end; p += 4) queue.push(view.getInt32(p, true))
+          } else if (child.id === 0x2035) {
+            const start = this.payloadStart(child)
+            for (let p = start + 4; p + 8 <= child.end; p += 8) {
+              if (view.getInt32(p, true) === 1) queue.push(view.getInt32(p + 4, true))
+            }
+          }
         }
       }
       return targets

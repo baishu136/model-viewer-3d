@@ -132,6 +132,7 @@ try {
     'triangle.mb',
     'triangle.c4d',
     'triangle.max',
+    'triangle-legacy.fbx',
     'triangle.blend'
   ]) {
     await open(name)

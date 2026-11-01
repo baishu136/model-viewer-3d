@@ -18,6 +18,7 @@ import { MayaAsciiLoader } from './loaders/MayaAsciiLoader'
 import { MayaBinaryLoader } from './loaders/MayaBinaryLoader'
 import { C4DLoader } from './loaders/C4DLoader'
 import { MaxLoader } from './loaders/MaxLoader'
+import { Fbx6Loader } from './loaders/Fbx6Loader'
 import { PMXExporter } from './loaders/utils/PMXExporter'
 
 export const SUPPORTED_EXTENSIONS = MODEL_EXTENSIONS
@@ -169,6 +170,17 @@ function applyWhiteMaterial(object: THREE.Object3D): void {
   })
 }
 
+/** 判断是否为 three.js FBXLoader 无法处理的旧版二进制 FBX（FileVersion < 7000） */
+function isLegacyFbxBinary(buffer: ArrayBuffer): boolean {
+  if (buffer.byteLength < 27) return false
+  const bytes = new Uint8Array(buffer, 0, 27)
+  const header = String.fromCharCode(...bytes.subarray(0, 18))
+  if (header !== 'Kaydara FBX Binary') return false
+  const view = new DataView(buffer, 0, 27)
+  const version = view.getUint32(23, true)
+  return version > 0 && version < 7000
+}
+
 async function readBuffer(filePath: string): Promise<ArrayBuffer> {
   // contextBridge 序列化可能返回 Uint8Array/SharedArrayBuffer，
   // 显式复制为干净的新 ArrayBuffer，避免 STLLoader 等解析出错
@@ -204,9 +216,16 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
       break
     }
     case 'fbx': {
-      const loader = new FBXLoader(manager)
-      root = loader.parse(buffer, dir)
-      animations = root.animations
+      if (isLegacyFbxBinary(buffer)) {
+        // three.js 的 FBXLoader 只支持 FileVersion >= 6400 的布局，
+        // 早期 3ds Max/Maya 导出的 6.x 二进制需要专用解析器。
+        const loader = new Fbx6Loader()
+        root = loader.parse(buffer)
+      } else {
+        const loader = new FBXLoader(manager)
+        root = loader.parse(buffer, dir)
+        animations = root.animations
+      }
       applyWhiteMaterial(root)
       break
     }

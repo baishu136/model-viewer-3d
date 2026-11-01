@@ -29,3 +29,6 @@ yarn-error.log*
 # 环境
 .env
 .env.local
+
+# 临时打包输出
+release-tmp/
