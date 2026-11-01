@@ -70,17 +70,6 @@ export class MaxLoader {
     // 判断本文件是否需要叠加节点平移（有一部分资产已把世界坐标烘进顶点）
     const sceneUsesNodeTransform = this.sceneUsesNodeTransform(meshes, nodeInfo.matrices, axisMatrix)
 
-    const centers: THREE.Vector3[] = []
-    for (const entry of meshes) {
-      const m = nodeInfo.matrices.get(entry.ownerItem)
-      if (!m) continue
-      centers.push(this.meshCenter(entry.positions).applyMatrix4(axisMatrix.clone().multiply(m)))
-    }
-    const center = this.medianCenter(centers)
-    let sceneRadius = 0
-    for (const p of centers) sceneRadius = Math.max(sceneRadius, p.distanceTo(center))
-    const sceneChainCandidates = centers.length > 2
-
     for (let i = 0; i < meshes.length; i++) {
       const entry = meshes[i]
       const nodeMatrix = nodeInfo.matrices.get(entry.ownerItem) || new THREE.Matrix4()
@@ -88,20 +77,7 @@ export class MaxLoader {
       // 只有旋转/缩放的节点必定要叠加（如 FBX 导入角色的 90° 立正）；带平移的节点
       // 则由 sceneUsesNodeTransform 判定是否已经烘焙进顶点。
       const useNodeTransform = !this.hasTranslation(nodeMatrix) || sceneUsesNodeTransform
-      let matrix = useNodeTransform ? nodeMatrix : new THREE.Matrix4()
-      if (useNodeTransform && sceneChainCandidates) {
-        // 部分资产库把世界坐标烘进子节点，再叠加父级链会把物件推得更远；
-        // 以多数物件的中心为参照，选择更贴近主体的那个位置。
-        const localMatrix = nodeInfo.localMatrices.get(entry.ownerItem)
-        if (localMatrix && this.hasTranslation(localMatrix)) {
-          const withChain = this.meshCenter(entry.positions).applyMatrix4(axisMatrix.clone().multiply(matrix))
-          if (withChain.distanceTo(center) > 0.6 * sceneRadius) {
-            const localOnly = this.meshCenter(entry.positions).applyMatrix4(axisMatrix.clone().multiply(localMatrix))
-            if (localOnly.distanceTo(center) < withChain.distanceTo(center)) matrix = localMatrix
-          }
-        }
-      }
-      const transform = axisMatrix.clone().multiply(matrix)
+      const transform = axisMatrix.clone().multiply(useNodeTransform ? nodeMatrix : new THREE.Matrix4())
 
       const geometry = this.buildGeometry(entry.positions, entry.indices)
       geometry.applyMatrix4(transform)
@@ -705,8 +681,9 @@ export class MaxLoader {
     const scale = this.readControllerVector(view, items, refs[2]) || [1, 1, 1]
 
     const translation = new THREE.Matrix4().makeTranslation(position[0], position[1], position[2])
-    // 3ds Max 的旋转控制器以弧度保存欧拉角，默认顺序 XYZ
-    const euler = new THREE.Euler(rotation[0], rotation[1], rotation[2], 'XYZ')
+    // 3ds Max 以行向量约定按 X→Y→Z 依次旋转（R = Rz·Ry·Rx），
+    // 等价于 three.js 的 'ZYX' 顺序（已用 3ds Max 导出的 FBX 逐物体核对）
+    const euler = new THREE.Euler(rotation[0], rotation[1], rotation[2], 'ZYX')
     const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(euler)
     const scaleMatrix = new THREE.Matrix4().makeScale(
       scale[0] === 0 ? 1 : scale[0],
