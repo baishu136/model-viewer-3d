@@ -89,7 +89,125 @@ export class MaxLoader {
       root.add(mesh)
     }
 
+    // 4. 修改器生成的对象（例如“闭合样条 + 挤出”）在 .max 中没有烘焙网格，
+    //    但样条控制点保存在修改器的 0x290a 块里，可据此重建轮廓面片。
+    const meshOwners = new Set(meshes.map((m) => m.ownerItem))
+    for (const node of nodeInfo.nodes) {
+      let hasMesh = false
+      for (const target of node.targets) {
+        if (meshOwners.has(target)) {
+          hasMesh = true
+          break
+        }
+      }
+      if (hasMesh) continue
+
+      const spline = this.buildSplineMesh(view, items, node.targets)
+      if (!spline) continue
+
+      const transform = axisMatrix.clone().multiply(sceneUsesNodeTransform ? node.matrix : new THREE.Matrix4())
+      spline.applyMatrix4(transform)
+      spline.computeVertexNormals()
+      spline.computeBoundingBox()
+
+      const mesh = new THREE.Mesh(spline)
+      mesh.name = node.name || 'MaxSpline'
+      root.add(mesh)
+    }
+
     return root
+  }
+
+  /**
+   * 从修改器的样条数据（0x2900 数量 + 0x290a 控制点）重建填充面片。
+   * 每个节点 52 字节：入切线 / 节点 / 出切线，各为 (x, y, 0)。
+   */
+  private buildSplineMesh(
+    view: DataView,
+    items: MaxChunkRef[],
+    targets: Set<number>
+  ): THREE.BufferGeometry | null {
+    let knotChunk: MaxChunkRef | null = null
+    let countChunk: MaxChunkRef | null = null
+
+    for (const target of targets) {
+      const item = items[target]
+      if (!item || !item.container) continue
+      const knots = this.findFirstChunk(view, item, 0x290a)
+      const count = this.findFirstChunk(view, item, 0x2900)
+      if (knots && count) {
+        knotChunk = knots
+        countChunk = count
+        break
+      }
+    }
+    if (!knotChunk || !countChunk) return null
+
+    const count = view.getUint32(this.payloadStart(countChunk), true)
+    if (count < 3 || count > 20000) return null
+
+    const dataLength = this.payloadLength(knotChunk) / 4
+    const stride = Math.round(dataLength / count)
+    if (stride < 11 || stride > 16) return null
+
+    const start = this.payloadStart(knotChunk)
+    const knotAt = (index: number): { in: THREE.Vector2; point: THREE.Vector2; out: THREE.Vector2 } => {
+      const base = start + index * stride * 4
+      return {
+        in: new THREE.Vector2(view.getFloat32(base + 12, true), view.getFloat32(base + 16, true)),
+        point: new THREE.Vector2(view.getFloat32(base + 24, true), view.getFloat32(base + 28, true)),
+        out: new THREE.Vector2(view.getFloat32(base + 36, true), view.getFloat32(base + 40, true))
+      }
+    }
+
+    const knots = []
+    for (let i = 0; i < count; i++) knots.push(knotAt(i))
+
+    // 判断是否闭合：最后一段的出切线应与首段的入切线重合
+    const closingGap = knots[count - 1].out.distanceTo(knots[0].in)
+    const span = new THREE.Box2()
+    for (const knot of knots) span.expandByPoint(knot.point)
+    const diagonal = span.getSize(new THREE.Vector2()).length()
+    if (diagonal <= 1e-6) return null
+    const closed = closingGap < diagonal * 0.05
+    if (!closed) return null
+
+    // 直接用节点位置构成轮廓：Max 的样条节点在拐角处非常密集，
+    // 用节点连线足以表达板件轮廓，且不会因采样自交导致三角化破洞。
+    const outline: THREE.Vector2[] = []
+    for (let i = 0; i < count; i++) {
+      const point = knots[i].point
+      const previous = outline[outline.length - 1]
+      if (previous && previous.distanceTo(point) < diagonal * 1e-4) continue
+      outline.push(point.clone())
+    }
+    while (outline.length > 1 && outline[0].distanceTo(outline[outline.length - 1]) < diagonal * 1e-4) {
+      outline.pop()
+    }
+
+    if (outline.length < 3) return null
+
+    let faces: number[][] | null = null
+    try {
+      faces = THREE.ShapeUtils.triangulateShape(outline, [])
+    } catch {
+      return null
+    }
+    if (!faces || faces.length === 0) return null
+
+    const positions = new Float32Array(outline.length * 3)
+    for (let i = 0; i < outline.length; i++) {
+      positions[i * 3] = outline[i].x
+      positions[i * 3 + 1] = outline[i].y
+      positions[i * 3 + 2] = 0
+    }
+    const indices: number[] = []
+    for (const face of faces) indices.push(face[0], face[1], face[2])
+
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    geometry.setIndex(indices)
+    return geometry
   }
 
   // ---------------------------------------------------------------
@@ -511,7 +629,12 @@ export class MaxLoader {
     view: DataView,
     items: MaxChunkRef[],
     meshOwners: Set<number>
-  ): { matrices: Map<number, THREE.Matrix4>; localMatrices: Map<number, THREE.Matrix4>; names: Map<number, string> } {
+  ): {
+    matrices: Map<number, THREE.Matrix4>
+    localMatrices: Map<number, THREE.Matrix4>
+    names: Map<number, string>
+    nodes: { index: number; name: string; targets: Set<number>; matrix: THREE.Matrix4 }[]
+  } {
     interface NodeInfo {
       name: string
       parent: number
@@ -603,7 +726,8 @@ export class MaxLoader {
           break
         }
       }
-      if (!bindsMesh) continue
+      // 没有网格的节点也可能是“闭合样条 + 挤出”等修改器对象
+      if (!bindsMesh && !this.targetsHaveSpline(view, items, targets)) continue
 
       relevant.push({ index, info, targets })
       let cursor = index
@@ -640,11 +764,13 @@ export class MaxLoader {
     const out = new Map<number, THREE.Matrix4>()
     const localOut = new Map<number, THREE.Matrix4>()
     const names = new Map<number, string>()
+    const nodeList: { index: number; name: string; targets: Set<number>; matrix: THREE.Matrix4 }[] = []
 
     for (const { index, info, targets } of relevant) {
       const matrix = resolve(index, new Set())
       const localMatrix = localOf(index).clone()
       const safeName = info.name.replace(/[^\p{L}\p{N}_\-. ]/gu, '')
+      nodeList.push({ index, name: safeName, targets, matrix })
       for (const target of targets) {
         if (!out.has(target)) out.set(target, matrix)
         if (!localOut.has(target)) localOut.set(target, localMatrix)
@@ -652,7 +778,17 @@ export class MaxLoader {
       }
     }
 
-    return { matrices: out, localMatrices: localOut, names }
+    return { matrices: out, localMatrices: localOut, names, nodes: nodeList }
+  }
+
+  /** 节点的引用链中是否带有样条控制点数据（0x290a） */
+  private targetsHaveSpline(view: DataView, items: MaxChunkRef[], targets: Set<number>): boolean {
+    for (const target of targets) {
+      const item = items[target]
+      if (!item || !item.container) continue
+      if (this.findFirstChunk(view, item, 0x290a)) return true
+    }
+    return false
   }
 
   private readNodeName(view: DataView, chunk: MaxChunkRef): string {
