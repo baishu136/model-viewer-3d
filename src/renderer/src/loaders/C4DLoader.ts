@@ -1,13 +1,20 @@
 import * as THREE from 'three'
-import { BinaryReader } from './utils/binary-reader'
 
 /**
- * High-performance, pure TypeScript parser for Cinema 4D (.c4d) files.
- * Supports:
- * - Direct extraction of native 3D polygonal geometries (Float32 and Float64 points + CPolygon index sets)
- * - Scanning for baked point arrays and meshes in HyperFile chunk streams
- * - Dimensional 3D interactive viewport stage (JPEG/PNG) with thickness and volumetric casing
- *   for procedural or rigging files where offline polygon meshes were not baked.
+ * 纯 TypeScript 实现的 Cinema 4D (.c4d) 场景解析器。
+ *
+ * C4D 文件由文件头 "QC4DC4D6" + 一段 HyperFile 二进制流组成。该二进制流是自描述的
+ * 标记流（token stream）：
+ *   0x01 + uint32 块ID + uint32 层级  = 开始一个块
+ *   0x02                              = 结束当前块
+ *   其余标记为带类型的值（int32 / float64 / 向量 / 字符串 / 内存块 ...）
+ * 块可以任意嵌套，形成对象树。多边形对象（Opolygon，ID 5100）内包含：
+ *   Tpoint   (5600) 顶点坐标，3 个内存块或 1 个交错内存块
+ *   Tpolygon (5604) 四边形索引，4 个内存块或 1 个交错内存块
+ *   Tuvw     (5671) 每个多边形 4 角的 UV 坐标
+ * 对象变换位于 0x1ade4 块中，依次为位置、缩放、HPB 欧拉角（弧度）。
+ *
+ * 本解析器直接读取这些真实几何数据，不依赖任何 C4D SDK，也不生成占位几何。
  */
 export class C4DLoader {
   private manager: THREE.LoadingManager
@@ -17,276 +24,528 @@ export class C4DLoader {
   }
 
   parse(buffer: ArrayBuffer): THREE.Group {
+    const bytes = new Uint8Array(buffer)
+    if (bytes.length < 32) {
+      throw new Error('无效的 Cinema 4D 文件: 文件过小')
+    }
+    if (this.readAscii(bytes, 0, 8) !== 'QC4DC4D6') {
+      throw new Error('无效的 Cinema 4D 文件: 缺少 QC4DC4D6 文件头')
+    }
+
     const root = new THREE.Group()
     root.name = 'C4DRoot'
 
-    const reader = new BinaryReader(buffer)
+    // 文件头固定 13 字节：8 字节标识 + 4 字节版本 + 1 字节保留
+    const streamStart = 13
+    const document = this.parseHyperFile(bytes, streamStart)
 
-    if (reader.length < 16) {
-      throw new Error('无效的 Cinema 4D 文件: 文件过小')
-    }
+    if (document) {
+      const objects = this.collectObjects(document)
+      let meshCount = 0
 
-    // 1. Traverse buffer to discover PolygonObject chunks or point/poly buffers
-    const foundMeshes = this.scanPolygonObjects(reader)
+      for (const object of objects) {
+        if (object.type !== 5100) continue // Opolygon
+        const mesh = this.buildPolygonObject(bytes, object)
+        if (!mesh) continue
 
-    if (foundMeshes.length > 0) {
-      for (const m of foundMeshes) {
-        root.add(m)
+        if (object.worldMatrix) {
+          // 直接烘焙进几何，导出 OBJ/GLB 等格式时坐标才正确
+          mesh.geometry.applyMatrix4(object.worldMatrix)
+          mesh.geometry.computeVertexNormals()
+          mesh.geometry.computeBoundingBox()
+        }
+        root.add(mesh)
+        meshCount++
       }
-      return root
+
+      // 对象本身没有烘焙多边形（例如未塌陷的程序化基本体），明确报错而不是伪造几何
+      if (meshCount === 0) {
+        throw new Error(
+          '该 Cinema 4D 文件未包含可读取的多边形网格。请在 C4D 中把程序化对象“转为可编辑对象”(C) 后保存，或导出为 FBX/OBJ/glTF。'
+        )
+      }
+    } else {
+      throw new Error('该 Cinema 4D 文件结构无法识别（HyperFile 解析失败）')
     }
 
-    // 2. Fallback: Extract embedded high-resolution viewport thumbnail into a 3D dimensional stage
-    const previewStage = this.extractEmbeddedThumbnail(buffer)
-    if (previewStage) {
-      root.add(previewStage)
-      return root
-    }
-
-    // 3. Fallback: Generate informative 3D stage
-    const fallbackStage = this.createInformativeStage(buffer.byteLength)
-    root.add(fallbackStage)
     return root
   }
 
-  /**
-   * Scans for embedded JPEG or PNG preview images in the header section
-   * and creates a dimensional 3D volumetric stage with front display face and casing depth.
-   */
-  private extractEmbeddedThumbnail(buffer: ArrayBuffer): THREE.Mesh | null {
-    const bytes = new Uint8Array(buffer)
-    let start = -1
-    let isJpg = false
-    let isPng = false
+  // ---------------------------------------------------------------
+  // HyperFile 标记流解析
+  // ---------------------------------------------------------------
 
-    const searchLimit = Math.min(bytes.length - 16, 65536)
-    for (let i = 0; i < searchLimit; i++) {
-      if (bytes[i] === 0xff && bytes[i + 1] === 0xd8 && bytes[i + 2] === 0xff) {
-        start = i
-        isJpg = true
-        break
-      }
-      if (
-        bytes[i] === 0x89 &&
-        bytes[i + 1] === 0x50 &&
-        bytes[i + 2] === 0x4e &&
-        bytes[i + 3] === 0x47
-      ) {
-        start = i
-        isPng = true
-        break
-      }
+  private parseHyperFile(bytes: Uint8Array, start: number): HyperChunk | null {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    const root: HyperChunk = {
+      id: -1,
+      level: 0,
+      start,
+      end: bytes.length,
+      parent: null,
+      children: [],
+      ints: [],
+      floats: [],
+      vecs: [],
+      strings: [],
+      blobs: []
     }
 
-    if (start === -1) return null
+    let current = root
+    let pos = start
+    let guard = 0
+    const guardLimit = bytes.length * 4
 
-    let end = -1
-    if (isJpg) {
-      for (let i = start + 2; i < bytes.length - 1; i++) {
-        if (bytes[i] === 0xff && bytes[i + 1] === 0xd9) {
-          end = i + 2
+    while (pos < bytes.length) {
+      if (++guard > guardLimit) break
+
+      const tag = bytes[pos++]
+
+      try {
+        if (tag === 0x01) {
+          if (pos + 8 > bytes.length) break
+          const id = view.getUint32(pos, false)
+          const level = view.getUint32(pos + 4, false)
+          pos += 8
+          const chunk: HyperChunk = {
+            id,
+            level,
+            start: pos - 9,
+            end: bytes.length,
+            parent: current,
+            children: [],
+            ints: [],
+            floats: [],
+            vecs: [],
+            strings: [],
+            blobs: []
+          }
+          current.children.push(chunk)
+          current = chunk
+        } else if (tag === 0x02) {
+          if (current === root) break
+          current.end = pos
+          current = current.parent || root
+        } else if (tag === 0x0c || tag === 0x15) {
+          current.ints.push(bytes[pos])
+          pos += 1
+        } else if (tag === 0x0d || tag === 0x0e) {
+          current.ints.push(view.getUint16(pos, false))
+          pos += 2
+        } else if (tag === 0x0f || tag === 0x10) {
+          current.ints.push(view.getInt32(pos, false))
+          pos += 4
+        } else if (tag === 0x11 || tag === 0x12) {
+          pos += 8
+        } else if (tag === 0x13) {
+          current.floats.push(view.getFloat64(pos, false))
+          pos += 8
+        } else if (tag === 0x14) {
+          current.floats.push(view.getFloat32(pos, false))
+          pos += 4
+        } else if (tag === 0x16) {
+          pos += 16
+        } else if (tag === 0x17) {
+          current.vecs.push([view.getFloat64(pos, false), view.getFloat64(pos + 8, false), view.getFloat64(pos + 16, false)])
+          pos += 24
+        } else if (tag === 0x18) {
+          current.vecs.push([view.getFloat32(pos, false), view.getFloat32(pos + 4, false), view.getFloat32(pos + 8, false)])
+          pos += 12
+        } else if (tag === 0x19) {
+          pos += 96
+        } else if (tag === 0x1a) {
+          pos += 48
+        } else if ((tag & 0x80) !== 0) {
+          // 0x80..0xff 均为 uint32(BE) 长度前缀 + 负载
+          const length = view.getUint32(pos, false)
+          pos += 4
+          if (length < 0 || pos + length > bytes.length) break
+
+          if (tag === 0x82 || tag === 0x83) {
+            // UTF-16BE 字符串
+            current.strings.push(this.readUtf16BE(view, pos, length))
+          } else {
+            current.blobs.push({ tag, offset: pos, length })
+          }
+          pos += length
+        } else {
+          // 未知标记，流已经不同步，保留已解析结果
           break
         }
+      } catch {
+        break
       }
-    } else if (isPng) {
-      for (let i = start + 8; i < bytes.length - 8; i++) {
-        if (
-          bytes[i] === 0x49 &&
-          bytes[i + 1] === 0x45 &&
-          bytes[i + 2] === 0x4e &&
-          bytes[i + 3] === 0x44
-        ) {
-          end = i + 8
-          break
+    }
+
+    return current === root && root.children.length === 0 ? null : root
+  }
+
+  // ---------------------------------------------------------------
+  // 对象树
+  // ---------------------------------------------------------------
+
+  private collectObjects(root: HyperChunk): C4DObject[] {
+    const objects: C4DObject[] = []
+
+    const walk = (chunk: HyperChunk, parentObject: C4DObject | null): void => {
+      let current = parentObject
+
+      const header = chunk.children.find((c) => c.id === 0x1adf0)
+      if (header && header.ints.length > 0) {
+        const object: C4DObject = {
+          type: header.ints[0],
+          name: header.strings[0] || '',
+          chunk,
+          transform: this.readTransform(chunk),
+          parent: parentObject,
+          worldMatrix: null
         }
+        objects.push(object)
+        current = object
+      }
+
+      for (const child of chunk.children) {
+        walk(child, current)
       }
     }
 
-    if (end === -1 || end <= start) return null
+    walk(root, null)
 
-    const imageBytes = bytes.subarray(start, end)
-    let binary = ''
-    for (let i = 0; i < imageBytes.length; i++) {
-      binary += String.fromCharCode(imageBytes[i])
+    // 计算世界矩阵
+    const resolve = (object: C4DObject, stack: Set<C4DObject>): THREE.Matrix4 => {
+      if (object.worldMatrix) return object.worldMatrix
+      if (stack.has(object)) {
+        return new THREE.Matrix4()
+      }
+      stack.add(object)
+      const local = this.toMatrix4(object.transform)
+      const world = object.parent ? resolve(object.parent, stack).clone().multiply(local) : local
+      stack.delete(object)
+      object.worldMatrix = world
+      return world
     }
-    const mime = isJpg ? 'image/jpeg' : 'image/png'
-    const dataUri = `data:${mime};base64,` + btoa(binary)
 
-    return this.create3DStage(dataUri, 100, 56.25)
+    for (const object of objects) resolve(object, new Set())
+
+    return objects
+  }
+
+  private readTransform(chunk: HyperChunk): C4DTransform {
+    const transformChunk = chunk.children.find((c) => c.id === 0x1ade4)
+    const identity: C4DTransform = {
+      position: new THREE.Vector3(0, 0, 0),
+      scale: new THREE.Vector3(1, 1, 1),
+      rotation: new THREE.Vector3(0, 0, 0) // H, P, B（弧度）
+    }
+    if (!transformChunk || transformChunk.vecs.length < 3) return identity
+
+    const [pos, scale, rot] = transformChunk.vecs
+    return {
+      position: new THREE.Vector3(pos[0], pos[1], pos[2]),
+      scale: new THREE.Vector3(
+        scale[0] === 0 ? 1 : scale[0],
+        scale[1] === 0 ? 1 : scale[1],
+        scale[2] === 0 ? 1 : scale[2]
+      ),
+      rotation: new THREE.Vector3(rot[0], rot[1], rot[2])
+    }
   }
 
   /**
-   * Builds a dimensional 3D volumetric stage with front viewport display, chamfered bevels,
-   * side casing, and rear chassis, avoiding paper-thin 2D billboards.
+   * C4D 为左手坐标系，Three.js 为右手坐标系。设 C = diag(1, 1, -1) 为坐标轴翻转，
+   * 则 world_rh = C · T · Ry(H) · Rx(P) · Rz(B) · S · p_lh 可化为
+   *   M = Translate(C·T) · Rz(-B) · Rx(P) · Ry(H) · Scale · C
+   * 该式已用真实文件（多边形对象 Pitch = -π/2）验证。
    */
-  private create3DStage(dataUri: string, cardWidth: number, cardHeight: number): THREE.Mesh {
-    const depth = 4 // 4 cm depth for a real volumetric enclosure
+  private toMatrix4(transform: C4DTransform): THREE.Matrix4 {
+    const { position, scale, rotation } = transform
+    const flip = new THREE.Matrix4().makeScale(1, 1, -1)
 
-    const texture = new THREE.TextureLoader(this.manager).load(dataUri)
-    texture.colorSpace = THREE.SRGBColorSpace
+    const translation = new THREE.Matrix4().makeTranslation(position.x, position.y, -position.z)
+    const rotH = new THREE.Matrix4().makeRotationY(rotation.x)
+    const rotP = new THREE.Matrix4().makeRotationX(rotation.y)
+    const rotB = new THREE.Matrix4().makeRotationZ(-rotation.z)
+    const scaling = new THREE.Matrix4().makeScale(scale.x, scale.y, scale.z)
 
-    const screenMaterial = new THREE.MeshBasicMaterial({
-      map: texture,
-      side: THREE.FrontSide
-    })
+    const matrix = new THREE.Matrix4()
+    matrix.multiplyMatrices(translation, rotB)
+    matrix.multiply(rotP)
+    matrix.multiply(rotH)
+    matrix.multiply(scaling)
+    matrix.multiply(flip)
+    return matrix
+  }
 
-    const bodyMaterial = new THREE.MeshStandardMaterial({
-      color: 0x0f172a,
-      roughness: 0.8,
-      metalness: 0.2
-    })
+  // ---------------------------------------------------------------
+  // 多边形对象
+  // ---------------------------------------------------------------
 
-    // Materials order for BoxGeometry: [+X, -X, +Y, -Y, +Z (Front), -Z (Back)]
-    const materials: THREE.Material[] = [
-      bodyMaterial,
-      bodyMaterial,
-      bodyMaterial,
-      bodyMaterial,
-      screenMaterial,
-      bodyMaterial
-    ]
+  private buildPolygonObject(bytes: Uint8Array, object: C4DObject): THREE.Mesh | null {
+    const pointChunk = this.findTensor(object.chunk, 0x15e0) // Tpoint
+    const polygonChunk = this.findTensor(object.chunk, 0x15e4) // Tpolygon
+    if (!pointChunk || !polygonChunk) return null
 
-    const geometry = new THREE.BoxGeometry(cardWidth, cardHeight, depth)
-    geometry.translate(0, cardHeight / 2, 0)
+    const pointCount = pointChunk.ints[0] || 0
+    const polygonCount = polygonChunk.ints[0] || 0
+    if (pointCount < 3 || polygonCount < 1) return null
+
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    const points = this.readPoints(view, pointChunk, pointCount)
+    if (!points) return null
+
+    const polygons = this.readPolygons(view, polygonChunk, polygonCount, pointCount)
+    if (!polygons) return null
+
+    const uvwChunk = this.findTensor(object.chunk, 0x1627) // Tuvw
+    const uvs = uvwChunk && uvwChunk.blobs.length > 0 ? this.readUvws(view, uvwChunk, polygonCount) : null
+
+    // (顶点索引, uv) 去重，保证同一顶点共享法线、UV 接缝处正确断开
+    const positions: number[] = []
+    const normalsUv: number[] = []
+    const indices: number[] = []
+    const lookup = new Map<string, number>()
+
+    const pushVertex = (index: number, uvIndex: number): number => {
+      const uv = uvs && uvs[uvIndex] ? uvs[uvIndex] : null
+      const key = uv ? `${index}|${uv[0].toFixed(5)}|${uv[1].toFixed(5)}` : `${index}|-`
+      const cached = lookup.get(key)
+      if (cached !== undefined) return cached
+
+      const next = positions.length / 3
+      positions.push(points[index * 3], points[index * 3 + 1], points[index * 3 + 2])
+      if (uv) normalsUv.push(uv[0], uv[1])
+      lookup.set(key, next)
+      return next
+    }
+
+    for (let i = 0; i < polygonCount; i++) {
+      const base = i * 4
+      const a = polygons[base]
+      const b = polygons[base + 1]
+      const c = polygons[base + 2]
+      const d = polygons[base + 3]
+      if (a >= pointCount || b >= pointCount || c >= pointCount || d >= pointCount) continue
+
+      // C4D 左手坐标系经翻转变换后，三角形顺序 (a, b, c) 会反向，需交换得到外向法线
+      const va = pushVertex(a, base)
+      const vb = pushVertex(b, base + 1)
+      const vc = pushVertex(c, base + 2)
+      indices.push(va, vc, vb)
+
+      if (d !== c) {
+        const vd = pushVertex(d, base + 3)
+        indices.push(va, vd, vc)
+      }
+    }
+
+    if (indices.length < 3) return null
+
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    if (uvs) geometry.setAttribute('uv', new THREE.Float32BufferAttribute(normalsUv, 2))
+    geometry.setIndex(indices)
     geometry.computeVertexNormals()
     geometry.computeBoundingBox()
 
-    const mesh = new THREE.Mesh(geometry, materials)
-    mesh.name = 'C4DPreviewBoard'
+    const mesh = new THREE.Mesh(geometry)
+    mesh.name = object.name || `C4DPolygon_${object.chunk.start}`
     return mesh
   }
 
-  private createInformativeStage(fileLength: number): THREE.Mesh {
-    const canvas = document.createElement('canvas')
-    canvas.width = 512
-    canvas.height = 320
-    const ctx = canvas.getContext('2d')
-    if (ctx) {
-      ctx.fillStyle = '#0f172a'
-      ctx.fillRect(0, 0, 512, 320)
-      ctx.fillStyle = '#38bdf8'
-      ctx.font = 'bold 24px sans-serif'
-      ctx.fillText('Cinema 4D 工程文件 (.c4d)', 36, 70)
-      ctx.fillStyle = '#cbd5e1'
-      ctx.font = '16px sans-serif'
-      ctx.fillText('该文件由 Cinema 4D 保存，未包含烘焙多边形。', 36, 130)
-      ctx.fillText('请在 C4D 首选项开启“保存多边形以用于外部程序”，', 36, 170)
-      ctx.fillText('或将对象转为可编辑多边形，导出为 FBX/OBJ/glTF 查看。', 36, 205)
-      ctx.fillStyle = '#94a3b8'
-      ctx.font = '14px monospace'
-      ctx.fillText(`文件大小: ${(fileLength / 1024 / 1024).toFixed(2)} MB`, 36, 265)
-    }
-    const dataUri = canvas.toDataURL('image/png')
-    return this.create3DStage(dataUri, 100, 62.5)
-  }
-
-  /**
-   * Scans the Cinema 4D binary payload for PolygonObject identifiers (ID 5100 / 0x13EC)
-   * and extracts vertex position arrays and polygon index sets.
-   */
-  private scanPolygonObjects(reader: BinaryReader): THREE.Mesh[] {
-    const meshes: THREE.Mesh[] = []
-    const bufferLength = reader.length
-
-    // Scan Big-Endian
-    reader.seek(0)
-    reader.setLittleEndian(false)
-
-    while (reader.position + 24 <= bufferLength) {
-      const pos = reader.position
-      const tag = reader.readUint32(false)
-
-      if (tag === 5100 || tag === 0x13ec0000) {
-        const mesh = this.tryReadPolygonData(reader, pos)
-        if (mesh) {
-          meshes.push(mesh)
-        }
-      }
-      reader.seek(pos + 4)
-    }
-
-    // Scan Little-Endian
-    if (meshes.length === 0) {
-      reader.seek(0)
-      reader.setLittleEndian(true)
-      while (reader.position + 24 <= bufferLength) {
-        const pos = reader.position
-        const tag = reader.readUint32(true)
-        if (tag === 5100) {
-          const mesh = this.tryReadPolygonData(reader, pos)
-          if (mesh) {
-            meshes.push(mesh)
-          }
-        }
-        reader.seek(pos + 4)
-      }
-    }
-
-    return meshes
-  }
-
-  private tryReadPolygonData(reader: BinaryReader, startOffset: number): THREE.Mesh | null {
-    try {
-      reader.seek(startOffset + 4)
-      const pointCount = reader.readUint32()
-      const polyCount = reader.readUint32()
-
-      if (pointCount < 3 || pointCount > 5000000 || polyCount < 1 || polyCount > 5000000) {
-        return null
-      }
-
-      if (reader.remaining < pointCount * 12) {
-        return null
-      }
-
-      const vertices: number[] = []
-      for (let i = 0; i < pointCount; i++) {
-        const x = reader.readFloat32()
-        const y = reader.readFloat32()
-        const z = reader.readFloat32()
-        if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-          vertices.push(x, y, z)
-        } else {
-          return null
-        }
-      }
-
-      const indices: number[] = []
-      if (reader.remaining >= polyCount * 16) {
-        for (let p = 0; p < polyCount; p++) {
-          const a = reader.readUint32()
-          const b = reader.readUint32()
-          const c = reader.readUint32()
-          const d = reader.readUint32()
-
-          if (a >= pointCount || b >= pointCount || c >= pointCount || d >= pointCount) {
-            return null
-          }
-
-          if (c === d) {
-            indices.push(a, b, c)
-          } else {
-            indices.push(a, b, c, a, c, d)
-          }
-        }
-      }
-
-      if (vertices.length >= 9) {
-        const geometry = new THREE.BufferGeometry()
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
-        if (indices.length > 0) {
-          geometry.setIndex(indices)
-        }
-        geometry.computeVertexNormals()
-        geometry.computeBoundingBox()
-
-        const mesh = new THREE.Mesh(geometry)
-        mesh.name = `C4DPolygon_${startOffset}`
-        return mesh
-      }
-    } catch {
-      return null
+  /** 找到带数据负载的张量块（Tpoint / Tpolygon / Tuvw 都包在同名外层块中） */
+  private findTensor(chunk: HyperChunk, id: number): HyperChunk | null {
+    if (chunk.id === id && chunk.blobs.length > 0 && chunk.ints.length > 0) return chunk
+    for (const child of chunk.children) {
+      const found = this.findTensor(child, id)
+      if (found) return found
     }
     return null
   }
+
+  private readPoints(view: DataView, chunk: HyperChunk, count: number): Float64Array | null {
+    const out = new Float64Array(count * 3)
+
+    if (chunk.blobs.length >= 3) {
+      // 分离式数组：X、Y、Z 三个内存块
+      const axis = [] as Float64Array[]
+      for (let i = 0; i < 3; i++) {
+        const values = this.readFloatBlock(view, chunk.blobs[i], count)
+        if (!values) return null
+        axis.push(values)
+      }
+      for (let i = 0; i < count; i++) {
+        out[i * 3] = axis[0][i]
+        out[i * 3 + 1] = axis[1][i]
+        out[i * 3 + 2] = axis[2][i]
+      }
+      return out
+    }
+
+    // 交错式数组：单个内存块，每点 12/24 字节
+    const blob = chunk.blobs[0]
+    const stride = (blob.length - 1) / count
+    if (stride !== 12 && stride !== 24) return null
+
+    for (let i = 0; i < count; i++) {
+      const off = blob.offset + 1 + i * stride
+      if (off + stride > blob.offset + blob.length) return null
+      if (stride === 12) {
+        out[i * 3] = view.getFloat32(off, false)
+        out[i * 3 + 1] = view.getFloat32(off + 4, false)
+        out[i * 3 + 2] = view.getFloat32(off + 8, false)
+      } else {
+        out[i * 3] = view.getFloat64(off, false)
+        out[i * 3 + 1] = view.getFloat64(off + 8, false)
+        out[i * 3 + 2] = view.getFloat64(off + 16, false)
+      }
+    }
+    return out
+  }
+
+  private readPolygons(
+    view: DataView,
+    chunk: HyperChunk,
+    count: number,
+    pointCount: number
+  ): Uint32Array | null {
+    const out = new Uint32Array(count * 4)
+
+    if (chunk.blobs.length >= 4) {
+      const column = [] as Uint32Array[]
+      for (let i = 0; i < 4; i++) {
+        const values = this.readUintBlock(view, chunk.blobs[i], count)
+        if (!values) return null
+        column.push(values)
+      }
+      for (let i = 0; i < count; i++) {
+        out[i * 4] = column[0][i]
+        out[i * 4 + 1] = column[1][i]
+        out[i * 4 + 2] = column[2][i]
+        out[i * 4 + 3] = column[3][i]
+      }
+      return out
+    }
+
+    const blob = chunk.blobs[0]
+    const stride = (blob.length - 1) / count
+    if (stride !== 4 && stride !== 8 && stride !== 16) return null
+
+    const perIndex = stride / 4
+    for (let i = 0; i < count; i++) {
+      for (let k = 0; k < 4; k++) {
+        const off = blob.offset + 1 + i * stride + k * perIndex
+        let value = 0
+        if (perIndex === 1) value = view.getUint8(off)
+        else if (perIndex === 2) value = view.getUint16(off, false)
+        else value = view.getUint32(off, false)
+        out[i * 4 + k] = value >= pointCount ? 0 : value
+      }
+    }
+    return out
+  }
+
+  private readUvws(view: DataView, chunk: HyperChunk, count: number): Array<[number, number]> | null {
+    const blob = chunk.blobs[0]
+    const perPolygon = (blob.length - 1) / count
+    if (perPolygon <= 0 || perPolygon % 4 !== 0) return null
+
+    const perCorner = perPolygon / 4
+    if (perCorner !== 8 && perCorner !== 12 && perCorner !== 16) return null
+
+    const out: Array<[number, number]> = new Array(count * 4)
+    for (let i = 0; i < count; i++) {
+      for (let k = 0; k < 4; k++) {
+        const off = blob.offset + 1 + i * perPolygon + k * perCorner
+        if (off + perCorner > blob.offset + blob.length) return null
+        const u = perCorner === 16 ? view.getFloat64(off, false) : view.getFloat32(off, false)
+        const v = perCorner === 16 ? view.getFloat64(off + 8, false) : view.getFloat32(off + 4, false)
+        out[i * 4 + k] = [u, v]
+      }
+    }
+    return out
+  }
+
+  private readFloatBlock(view: DataView, blob: HyperBlob, count: number): Float64Array | null {
+    if (count <= 0) return null
+    const stride = (blob.length - 1) / count
+    if (stride !== 4 && stride !== 8) return null
+    if (blob.offset + blob.length > view.byteLength) return null
+
+    const out = new Float64Array(count)
+    for (let i = 0; i < count; i++) {
+      const off = blob.offset + 1 + i * stride
+      out[i] = stride === 8 ? view.getFloat64(off, false) : view.getFloat32(off, false)
+    }
+    return out
+  }
+
+  private readUintBlock(view: DataView, blob: HyperBlob, count: number): Uint32Array | null {
+    if (count <= 0) return null
+    const stride = (blob.length - 1) / count
+    if (stride !== 1 && stride !== 2 && stride !== 4) return null
+    if (blob.offset + blob.length > view.byteLength) return null
+
+    const out = new Uint32Array(count)
+    for (let i = 0; i < count; i++) {
+      const off = blob.offset + 1 + i * stride
+      out[i] = stride === 4 ? view.getUint32(off, false) : stride === 2 ? view.getUint16(off, false) : view.getUint8(off)
+    }
+    return out
+  }
+
+  private readAscii(bytes: Uint8Array, start: number, length: number): string {
+    let text = ''
+    for (let i = 0; i < length; i++) text += String.fromCharCode(bytes[start + i])
+    return text
+  }
+
+  private readUtf16BE(view: DataView, start: number, length: number): string {
+    let text = ''
+    for (let i = 0; i + 1 < length; i += 2) {
+      const code = view.getUint16(start + i, false)
+      if (code === 0) break
+      text += String.fromCharCode(code)
+    }
+    return text
+  }
+}
+
+// ---------------------------------------------------------------
+// 内部类型
+// ---------------------------------------------------------------
+
+interface HyperBlob {
+  tag: number
+  offset: number
+  length: number
+}
+
+interface HyperChunk {
+  id: number
+  level: number
+  start: number
+  end: number
+  parent: HyperChunk | null
+  children: HyperChunk[]
+  ints: number[]
+  floats: number[]
+  vecs: number[][]
+  strings: string[]
+  blobs: HyperBlob[]
+}
+
+interface C4DTransform {
+  position: THREE.Vector3
+  scale: THREE.Vector3
+  /** H(偏航)、P(俯仰)、B(翻滚)，弧度 */
+  rotation: THREE.Vector3
+}
+
+interface C4DObject {
+  type: number
+  name: string
+  chunk: HyperChunk
+  transform: C4DTransform
+  parent: C4DObject | null
+  worldMatrix: THREE.Matrix4 | null
 }

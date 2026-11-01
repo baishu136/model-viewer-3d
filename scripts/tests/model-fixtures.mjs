@@ -228,23 +228,78 @@ createNode mesh -n "pTriangleShape1" -p "pTriangle1";
   mbRoot.writeUInt32BE(mbPayload.length, 4)
   fs.writeFileSync(path.join(dir, 'triangle.mb'), Buffer.concat([mbRoot, mbPayload]))
 
-  // 3. Minimal Cinema 4D fixture (.c4d)
-  const c4dBuf = Buffer.alloc(4 + 4 + 4 + 4 + 36 + 16)
-  let c4dPos = 0
-  c4dBuf.write('MC4D', c4dPos, 4, 'ascii'); c4dPos += 4
-  c4dBuf.writeUInt32BE(5100, c4dPos); c4dPos += 4 // PolygonObject ID
-  c4dBuf.writeUInt32BE(3, c4dPos); c4dPos += 4    // 3 points
-  c4dBuf.writeUInt32BE(1, c4dPos); c4dPos += 4    // 1 polygon
-  for (let i = 0; i < 9; i++) {
-    c4dBuf.writeFloatBE(verts[i], c4dPos)
-    c4dPos += 4
+  // 3. Minimal Cinema 4D fixture (.c4d)：真实的 HyperFile 标记流结构
+  const buildC4DFixture = () => {
+    const parts = []
+    const u32be = (v) => { const b = Buffer.alloc(4); b.writeUInt32BE(v >>> 0); return b }
+    const i32be = (v) => { const b = Buffer.alloc(4); b.writeInt32BE(v); return b }
+    const f64be = (v) => { const b = Buffer.alloc(8); b.writeDoubleBE(v); return b }
+    const start = (id) => parts.push(Buffer.from([0x01]), u32be(id), u32be(0))
+    const end = () => parts.push(Buffer.from([0x02]))
+    const intToken = (v) => parts.push(Buffer.from([0x0f]), i32be(v))
+    const vecToken = (x, y, z) => parts.push(Buffer.from([0x17]), f64be(x), f64be(y), f64be(z))
+    const blockToken = (marker, data) => parts.push(Buffer.from([0x8c]), u32be(data.length + 1), Buffer.from([marker]), data)
+    const points = [[0, 0, 0], [10, 0, 0], [0, 10, 0]]
+    const name = 'Triangle'
+    const nameBuf = Buffer.alloc(name.length * 2)
+    for (let i = 0; i < name.length; i++) nameBuf.writeUInt16BE(name.charCodeAt(i), i * 2)
+
+    start(0x1adeb) // 文档块
+    start(0xf4683) // BaseObject
+    start(0x1adf0) // 对象头：类型 5100 = Opolygon
+    intToken(5100)
+    intToken(0)
+    parts.push(Buffer.from([0x82]), u32be(nameBuf.length), nameBuf)
+    end()
+    start(0x1ade4) // 变换：位置 / 缩放 / HPB
+    vecToken(0, 0, 0)
+    vecToken(1, 1, 1)
+    vecToken(0, 0, 0)
+    end()
+    start(0x1ae14) // 对象数据
+    start(0x15e0) // Tpoint
+    start(0x15e0)
+    intToken(points.length)
+    for (let axis = 0; axis < 3; axis++) {
+      const data = Buffer.alloc(points.length * 8)
+      for (let i = 0; i < points.length; i++) data.writeDoubleBE(points[i][axis], i * 8)
+      blockToken(0x06, data)
+    }
+    end()
+    end()
+    start(0x15e4) // Tpolygon
+    start(0x15e4)
+    intToken(1)
+    for (const corner of [0, 1, 2, 2]) blockToken(0x03, u32be(corner))
+    end()
+    end()
+    end()
+    end()
+    end()
+
+    const header = Buffer.concat([Buffer.from('QC4DC4D6', 'ascii'), u32be(0x00004a50), Buffer.from([0x00])])
+    fs.writeFileSync(path.join(dir, 'triangle.c4d'), Buffer.concat([header, ...parts]))
   }
-  // CPolygon (a=0, b=1, c=2, d=2 for triangle)
-  c4dBuf.writeUInt32BE(0, c4dPos); c4dPos += 4
-  c4dBuf.writeUInt32BE(1, c4dPos); c4dPos += 4
-  c4dBuf.writeUInt32BE(2, c4dPos); c4dPos += 4
-  c4dBuf.writeUInt32BE(2, c4dPos); c4dPos += 4
-  fs.writeFileSync(path.join(dir, 'triangle.c4d'), c4dBuf)
+  buildC4DFixture()
+
+  // 3b. Minimal 3ds Max fixture (.max)：真实 OLE 复合文档 + Scene 块结构
+  const buildMaxFixture = () => {
+    const CFB = createRequire(import.meta.url)('cfb')
+    const u16le = (v) => { const b = Buffer.alloc(2); b.writeUInt16LE(v >>> 0); return b }
+    const u32le = (v) => { const b = Buffer.alloc(4); b.writeUInt32LE(v >>> 0); return b }
+    const f32le = (v) => { const b = Buffer.alloc(4); b.writeFloatLE(v); return b }
+    const container = (id, payload) => Buffer.concat([u16le(id), u32le(0x80000000 | (payload.length + 6)), payload])
+    const chunk = (id, payload) => Buffer.concat([u16le(id), u32le(payload.length + 6), payload])
+
+    const vertexTable = Buffer.concat([u32le(3), f32le(0), f32le(0), f32le(0), f32le(10), f32le(0), f32le(0), f32le(0), f32le(10), f32le(0)])
+    const faceTable = Buffer.concat([u32le(1), u32le(0), u32le(1), u32le(2), u32le(1), u32le(7)])
+    const scene = container(0x2027, container(0x08fe, Buffer.concat([chunk(0x0914, vertexTable), chunk(0x0912, faceTable)])))
+
+    const cfb = CFB.utils.cfb_new()
+    CFB.utils.cfb_add(cfb, '/Scene', scene)
+    fs.writeFileSync(path.join(dir, 'triangle.max'), Buffer.from(CFB.write(cfb, { type: 'buffer' })))
+  }
+  buildMaxFixture()
 
   // 4. Minimal Blender fixture (.blend)
   const buildBlendFixture = () => {

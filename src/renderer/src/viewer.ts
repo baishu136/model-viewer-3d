@@ -410,8 +410,7 @@ export class Viewer {
 
     // 智能视口与展板自适应
     const isStandee =
-      !!this.modelRoot.getObjectByName('C4DPreviewBoard') ||
-      !!this.modelRoot.getObjectByName('MaxPreviewBoard') ||
+      !!this.modelRoot.getObjectByName('MarkdownPreviewCard') ||
       size.z <= 0.005 * Math.max(size.x, size.y)
 
     const fovV = (this.camera.fov * Math.PI) / 180
@@ -501,7 +500,7 @@ export class Viewer {
         return
       }
       if (!mesh.isMesh) return
-      if (mesh.name === 'C4DPreviewBoard' || mesh.name === 'MaxPreviewBoard') {
+      if (mesh.name === 'MarkdownPreviewCard') {
         mesh.renderOrder = 1
         mesh.visible = true
         return

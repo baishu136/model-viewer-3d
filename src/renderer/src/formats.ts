@@ -160,7 +160,7 @@ function applyWhiteMaterial(object: THREE.Object3D): void {
   object.traverse((child) => {
     if ((child as THREE.Mesh).isMesh) {
       const mesh = child as THREE.Mesh
-      if (mesh.name === 'C4DPreviewBoard' || mesh.name === 'MaxPreviewBoard') return
+      if (mesh.name === 'MarkdownPreviewCard') return
       mesh.material = makeMaterial()
       if (!mesh.geometry.getAttribute('normal')) {
         mesh.geometry.computeVertexNormals()
@@ -349,7 +349,7 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
       geometry.computeVertexNormals()
       geometry.computeBoundingBox()
       const cardMesh = new THREE.Mesh(geometry, material)
-      cardMesh.name = 'C4DPreviewBoard' // Reuse preview board exemption in viewer
+      cardMesh.name = 'MarkdownPreviewCard' // 文档预览卡：viewer 中保持原材质
       root = new THREE.Group()
       root.name = 'MarkdownRoot'
       root.add(cardMesh)

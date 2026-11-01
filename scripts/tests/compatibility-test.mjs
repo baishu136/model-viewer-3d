@@ -131,6 +131,7 @@ try {
     'triangle.ma',
     'triangle.mb',
     'triangle.c4d',
+    'triangle.max',
     'triangle.blend'
   ]) {
     await open(name)
