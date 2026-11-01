@@ -32,3 +32,6 @@ yarn-error.log*
 
 # 临时打包输出
 release-tmp/
+
+# 临时调试目录
+.tmp-*/
