@@ -70,6 +70,17 @@ export class MaxLoader {
     // 判断本文件是否需要叠加节点平移（有一部分资产已把世界坐标烘进顶点）
     const sceneUsesNodeTransform = this.sceneUsesNodeTransform(meshes, nodeInfo.matrices, axisMatrix)
 
+    const centers: THREE.Vector3[] = []
+    for (const entry of meshes) {
+      const m = nodeInfo.matrices.get(entry.ownerItem)
+      if (!m) continue
+      centers.push(this.meshCenter(entry.positions).applyMatrix4(axisMatrix.clone().multiply(m)))
+    }
+    const center = this.medianCenter(centers)
+    let sceneRadius = 0
+    for (const p of centers) sceneRadius = Math.max(sceneRadius, p.distanceTo(center))
+    const sceneChainCandidates = centers.length > 2
+
     for (let i = 0; i < meshes.length; i++) {
       const entry = meshes[i]
       const nodeMatrix = nodeInfo.matrices.get(entry.ownerItem) || new THREE.Matrix4()
@@ -77,7 +88,20 @@ export class MaxLoader {
       // 只有旋转/缩放的节点必定要叠加（如 FBX 导入角色的 90° 立正）；带平移的节点
       // 则由 sceneUsesNodeTransform 判定是否已经烘焙进顶点。
       const useNodeTransform = !this.hasTranslation(nodeMatrix) || sceneUsesNodeTransform
-      const transform = useNodeTransform ? axisMatrix.clone().multiply(nodeMatrix) : axisMatrix
+      let matrix = useNodeTransform ? nodeMatrix : new THREE.Matrix4()
+      if (useNodeTransform && sceneChainCandidates) {
+        // 部分资产库把世界坐标烘进子节点，再叠加父级链会把物件推得更远；
+        // 以多数物件的中心为参照，选择更贴近主体的那个位置。
+        const localMatrix = nodeInfo.localMatrices.get(entry.ownerItem)
+        if (localMatrix && this.hasTranslation(localMatrix)) {
+          const withChain = this.meshCenter(entry.positions).applyMatrix4(axisMatrix.clone().multiply(matrix))
+          if (withChain.distanceTo(center) > 0.6 * sceneRadius) {
+            const localOnly = this.meshCenter(entry.positions).applyMatrix4(axisMatrix.clone().multiply(localMatrix))
+            if (localOnly.distanceTo(center) < withChain.distanceTo(center)) matrix = localMatrix
+          }
+        }
+      }
+      const transform = axisMatrix.clone().multiply(matrix)
 
       const geometry = this.buildGeometry(entry.positions, entry.indices)
       geometry.applyMatrix4(transform)
@@ -395,6 +419,22 @@ export class MaxLoader {
   }
 
   /** 网格是否位于对象局部坐标系（中心接近原点，典型的未塌陷基本体） */
+  /** 网格包围盒中心 */
+  private meshCenter(positions: Float32Array): THREE.Vector3 {
+    const box = this.meshBounds(positions)
+    return box ? box.getCenter(new THREE.Vector3()) : new THREE.Vector3()
+  }
+
+  /** 一组点的逐轴中位数，用于估计场景主体中心 */
+  private medianCenter(points: THREE.Vector3[]): THREE.Vector3 {
+    if (points.length === 0) return new THREE.Vector3()
+    const xs = points.map((p) => p.x).sort((a, b) => a - b)
+    const ys = points.map((p) => p.y).sort((a, b) => a - b)
+    const zs = points.map((p) => p.z).sort((a, b) => a - b)
+    const mid = Math.floor(points.length / 2)
+    return new THREE.Vector3(xs[mid], ys[mid], zs[mid])
+  }
+
   /**
    * 判断整份文件是否应当叠加节点变换。
    *
@@ -495,7 +535,7 @@ export class MaxLoader {
     view: DataView,
     items: MaxChunkRef[],
     meshOwners: Set<number>
-  ): { matrices: Map<number, THREE.Matrix4>; names: Map<number, string> } {
+  ): { matrices: Map<number, THREE.Matrix4>; localMatrices: Map<number, THREE.Matrix4>; names: Map<number, string> } {
     interface NodeInfo {
       name: string
       parent: number
@@ -622,18 +662,21 @@ export class MaxLoader {
     }
 
     const out = new Map<number, THREE.Matrix4>()
+    const localOut = new Map<number, THREE.Matrix4>()
     const names = new Map<number, string>()
 
     for (const { index, info, targets } of relevant) {
       const matrix = resolve(index, new Set())
+      const localMatrix = localOf(index).clone()
       const safeName = info.name.replace(/[^\p{L}\p{N}_\-. ]/gu, '')
       for (const target of targets) {
         if (!out.has(target)) out.set(target, matrix)
+        if (!localOut.has(target)) localOut.set(target, localMatrix)
         if (!names.has(target)) names.set(target, safeName)
       }
     }
 
-    return { matrices: out, names }
+    return { matrices: out, localMatrices: localOut, names }
   }
 
   private readNodeName(view: DataView, chunk: MaxChunkRef): string {
@@ -662,6 +705,7 @@ export class MaxLoader {
     const scale = this.readControllerVector(view, items, refs[2]) || [1, 1, 1]
 
     const translation = new THREE.Matrix4().makeTranslation(position[0], position[1], position[2])
+    // 3ds Max 的旋转控制器以弧度保存欧拉角，默认顺序 XYZ
     const euler = new THREE.Euler(rotation[0], rotation[1], rotation[2], 'XYZ')
     const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(euler)
     const scaleMatrix = new THREE.Matrix4().makeScale(
