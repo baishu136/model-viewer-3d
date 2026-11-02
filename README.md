@@ -1,5 +1,11 @@
 # 3D 模型查看器
 
+> **反馈渠道与声明**：若出现支持的格式无法正常浏览，请进群附上原文件并说明问题或提供截图。
+>
+> Telegram 反馈群：[点击加入](https://t.me/+uel5I_ynIFIzMzE1)；也可扫描下方 QQ 群二维码反馈。
+
+<img src="docs/assets/feedback-qq-group.jpg" alt="QQ 群反馈二维码" width="260" />
+
 一款独立运行的 Windows 桌面模型与动画查看器，支持 FBX、GLB/glTF、VRM 0.x/1.0、OBJ、STL、PLY，以及 Blender (.blend/.blender)、Maya (.ma/.mb)、Cinema 4D (.c4d)、3ds Max (.max) 与 PMX/PMD 输入。无需安装大型 DCC 软件，支持将当前姿态导出为 OBJ、STL、FBX、GLB、glTF、PLY、PMX 或静态 VRM。原生工程格式读取已保存的几何数据，具体测试范围和限制见 [格式兼容性说明](docs/format-compatibility.md)。
 
 ## 功能特性
@@ -56,7 +62,7 @@ npm run package    # 打包 NSIS 安装包 + zip 便携版（输出到 release/�
 
 ## 下载
 
-从 [GitHub Releases](https://github.com/baishu136/model-viewer-3d/releases/latest) 下载 Windows 便携版 ZIP。解压后运行 `3D模型查看器.exe`；请保留压缩包中的全部文件和文件夹。
+从 [GitHub Releases](https://github.com/baishu136/model-viewer-3d/releases/latest) 下载 Windows x64 安装包或便携版 ZIP。安装包支持选择安装目录；便携版解压后运行 `3D模型查看器.exe`，请保留压缩包中的全部文件和文件夹。可使用同页的 `SHA256SUMS.txt` 校验下载文件。
 
 当前版本 **v0.5.0** 新增静态 VRM 1.0 导出及原生格式导出矩阵验证，完整变化见 [更新日志](CHANGELOG.md)。
 
