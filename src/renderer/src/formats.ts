@@ -328,6 +328,7 @@ export async function loadModelFile(filePath: string): Promise<LoadResult> {
     case 'blender': {
       const loader = new BlendLoader(manager)
       root = loader.parse(buffer)
+      animations = (root.userData.animations as THREE.AnimationClip[]) ?? []
       applyWhiteMaterial(root)
       unit = 'm'
       break
