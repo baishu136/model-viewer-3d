@@ -1,5 +1,7 @@
 # 3D 模型查看器
 
+![软件截图](docs/assets/screenshot.jpg)
+
 > **反馈渠道与声明**：若出现支持的格式无法正常浏览，请进群附上原文件并说明问题或提供截图。
 >
 > Telegram 反馈群：[点击加入](https://t.me/+uel5I_ynIFIzMzE1)；也可扫描下方 QQ 群二维码反馈。
@@ -64,7 +66,7 @@ npm run package    # 打包 NSIS 安装包 + zip 便携版（输出到 release/�
 
 从 [GitHub Releases](https://github.com/baishu136/model-viewer-3d/releases/latest) 下载 Windows x64 安装包或便携版 ZIP。安装包支持选择安装目录；便携版解压后运行 `3D模型查看器.exe`，请保留压缩包中的全部文件和文件夹。可使用同页的 `SHA256SUMS.txt` 校验下载文件。
 
-当前版本 **v0.5.0** 新增静态 VRM 1.0 导出及原生格式导出矩阵验证，完整变化见 [更新日志](CHANGELOG.md)。
+当前源码版本 **v0.5.1** 修复 Blender 场景面片错乱、对象变换和多圈旋转动画，并增加基础笼架修改器预览；已发布安装包版本以 Releases 页面为准。完整变化见 [更新日志](CHANGELOG.md)。
 
 > 注：Windows 下 npm 子进程可能继承 `ELECTRON_RUN_AS_NODE` 导致 electron 以 Node 模式运行，
 > 因此 dev 脚本通过 `scripts/dev-clean.mjs` 启动，确保环境干净。

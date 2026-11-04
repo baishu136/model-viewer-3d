@@ -1,6 +1,6 @@
 {
   "name": "model-viewer-3d",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "独立运行的 3D 模型与动画查看器，支持 VRM 0.x/1.0、FBX、GLB/glTF、OBJ、STL、PLY、PMX、PMD、BLEND、BLENDER、C4D、MA、MB、MAX、MD，以及八种静态模型导出",
   "main": "./out/main/index.js",
   "type": "module",
@@ -15,6 +15,9 @@
     "test:compatibility": "node scripts/tests/compatibility-test.mjs",
     "test:max": "node scripts/tests/max-loader-test.mjs",
     "test:max:reference": "node scripts/tests/max-reference-test.mjs",
+    "test:blend": "node scripts/tests/blend-loader-test.mjs",
+    "test:blend:reference": "node scripts/tests/blend-reference-test.mjs",
+    "test:blend:viewer": "node scripts/tests/blend-viewer-test.mjs",
     "test:formats:real": "node scripts/tests/format-audit.mjs",
     "test:formats": "node scripts/tests/format-regression-test.mjs",
     "test:exports:native": "node scripts/tests/native-export-test.mjs",
